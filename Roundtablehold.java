@@ -1,718 +1,977 @@
 import com.sun.j3d.utils.universe.SimpleUniverse;
 import com.sun.j3d.utils.geometry.Cylinder;
-import com.sun.j3d.utils.geometry.Sphere;
-import com.sun.j3d.utils.picking.PickCanvas;
-import com.sun.j3d.utils.picking.PickResult;
 
 import javax.media.j3d.*;
 import javax.vecmath.*;
 import java.awt.*;
 import java.awt.event.*;
-import java.util.Enumeration;
 import javax.swing.*;
+import java.util.ArrayList;
 
 /**
- * RoundtableHold -- Java3D edition
+ * Roundtable Hold - Elden Ring inspired scene (Java3D 1.5 / jogamp) v2
  *
- * Navigation  : OrbitBehavior (drag to orbit, scroll to zoom).
- *               A ViewpointRestrictor Behavior runs every frame and clamps
- *               the camera inside the room cylinder and above the floor so
- *               the viewer can never escape through the walls.
- *
- * Gameplay    : Click one of the three glowing keys to collect it.
- *               Each collected key lights the matching lantern above the
- *               exit door.  Once all three are found the door panel is
- *               hidden via a Switch node and a message appears.
- *
+ * Build (Windows):
+ * javac -cp j3dcore.jar;j3dutils.jar;vecmath.jar RoundtableHold.java
+ * java -cp .;j3dcore.jar;j3dutils.jar;vecmath.jar RoundtableHold
  */
 public class RoundtableHold extends JFrame {
 
-    // -- Room geometry constants --------------------------------------------
-    private static final int   ROOM_SEGMENTS = 64;
-    private static final float ROOM_RADIUS   = 14.0f;
-    private static final float ROOM_HEIGHT   = 6.0f;
+    // ── room ──────────────────────────────────────────────────────────────────
+    private static final int ROOM_SEGS = 512;
+    private static final float ROOM_R = 14.0f;
+    private static final float ROOM_H = 6.0f;
+    private static final float FLOOR_Y = -ROOM_H / 2f; // -3.0
+    private static final float CEIL_Y = ROOM_H / 2f; // 3.0
 
-    private static final int   TABLE_SEGMENTS = 48;
-    private static final float TABLE_RADIUS   = 3.5f;
-    private static final float TABLE_HEIGHT   = 0.18f;
-    private static final float TABLE_Y        = -1.2f;
+    // ── table ─────────────────────────────────────────────────────────────────
+    private static final float TABLE_R = 3.5f;
+    private static final float TABLE_H = 0.18f;
+    private static final float TABLE_Y = -1.2f;
+    private static final float LEG_R = 0.08f;
+    private static final float LEG_H = 1.1f;
+    private static final float LEG_Y = TABLE_Y - LEG_H / 2f - TABLE_H / 2f;
 
-    private static final float LEG_RADIUS = 0.06f;
-    private static final float LEG_HEIGHT = 1.1f;
-    private static final float LEG_Y      = TABLE_Y - (LEG_HEIGHT / 2f) - (TABLE_HEIGHT / 2f);
-
-    private static final float GEM_Y       = TABLE_Y + TABLE_HEIGHT / 2f + 0.35f;
-    private static final float GEM_SIZE    = 0.22f;
+    // ── gem ───────────────────────────────────────────────────────────────────
+    private static final float GEM_Y = 0.3f;
+    private static final float GEM_SIZE = 0.22f;
     private static final float GEM_SCALE_Y = 2.8f;
 
-    // -- Door constants -----------------------------------------------------
-    private static final float DOOR_WIDTH   = 1.6f;
-    private static final float DOOR_HEIGHT  = 2.8f;
-    private static final float DOOR_Z       = -(ROOM_RADIUS - 0.2f);
-    private static final float DOOR_PANEL_Y = -ROOM_HEIGHT / 2f + DOOR_HEIGHT / 2f;
+    // ── archway opening (upside-down U on the north wall) ─────────────────────
+    // Opening: rectangular base (width x ARCH_SH) capped by a semicircle.
+    private static final float ARCH_W = 5.5f; // opening width
+    private static final float ARCH_SH = 3.2f; // straight-side height
+    private static final float ARCH_CR = ARCH_W / 2f; // semicircle radius = 2.0
+    private static final float ARCH_TOTAL = ARCH_SH + ARCH_CR; // 4.5 (< ROOM_H 6.0)
+    private static final float ARCH_TRIM = 0.55f; // trim ring thickness
 
-    // -- Colours ------------------------------------------------------------
-    private static final Color3f YELLOW_LIGHT = new Color3f(1.0f, 0.85f, 0.2f);
-    private static final Color3f AMBIENT_COL  = new Color3f(0.35f, 0.30f, 0.38f);
-    private static final Color3f LANTERN_OFF  = new Color3f(0.05f, 0.04f, 0.02f);
-    private static final Color3f LANTERN_ON   = new Color3f(1.00f, 0.80f, 0.20f);
+    // ── hallway ───────────────────────────────────────────────────────────────
+    private static final float HALL_DEPTH = 10.0f;
+    // Push the arch face inward (toward +Z) so it clears the curved cylinder wall.
+    // The cylinder wall at the north point peaks at z = -ROOM_R, but the chord
+    // across the ARCH_W opening sits at z = -sqrt(ROOM_R^2 - (ARCH_W/2)^2) ≈
+    // -13.71.
+    // We place the trim face slightly inside that chord so it's fully visible.
+    private static final float NORTH_Z = -(float) Math.sqrt(ROOM_R * ROOM_R - (ARCH_W / 2f) * (ARCH_W / 2f)) + 0.1f;
+    private static final float HALL_END_Z = NORTH_Z - HALL_DEPTH;
+    // South wall mirror (positive Z)
+    private static final float SOUTH_Z = (float) Math.sqrt(ROOM_R * ROOM_R - (ARCH_W / 2f) * (ARCH_W / 2f)) - 0.1f;
+    private static final float SOUTH_END_Z = SOUTH_Z + HALL_DEPTH;
 
-    // -- Key world positions ------------------------------------------------
-    private static final float[][] KEY_POSITIONS = {
-        { -7.5f, -ROOM_HEIGHT / 2f + 0.4f,  3.5f },
-        {  5.0f, -ROOM_HEIGHT / 2f + 0.4f, -8.0f },
-        {  8.5f, -ROOM_HEIGHT / 2f + 0.4f,  5.0f }
+    // Diagonal wall angles (in cylinder parameterisation x=R·cos(a), z=R·sin(a))
+    // SE: a=π/4 → (x=+R/√2, z=+R/√2) SW: a=3π/4 → (x=-R/√2, z=+R/√2)
+    private static final double SE_ANGLE = Math.PI / 4.0;
+    private static final double SW_ANGLE = 3.0 * Math.PI / 4.0;
+    // Distance from origin to chord face along the wall's outward radial
+    private static final float DIAG_CHORD = (float) Math.sqrt(ROOM_R * ROOM_R - (ARCH_W / 2f) * (ARCH_W / 2f)) - 0.1f;
+
+    // ── colours ───────────────────────────────────────────────────────────────
+    private static final Color3f YELLOW = new Color3f(1.0f, 0.85f, 0.2f);
+    private static final Color3f AMB_COL = new Color3f(0.35f, 0.30f, 0.38f);
+
+    // ── first-person player / puzzle gameplay ────────────────────────────────
+    private static final float PLAYER_RADIUS = 0.38f;
+    private static final float PLAYER_EYE_Y = FLOOR_Y + 2.35f;
+    private static final float WALK_SPEED = 0.16f;
+    private static final float MOUSE_SENS = 0.006f;
+
+    private final TransformGroup[] keyTGs = new TransformGroup[3];
+    private final boolean[] keyTaken = new boolean[3];
+    private final Shape3D[] doorLightShapes = new Shape3D[3];
+    private final PointLight[] doorLightNodes = new PointLight[3];
+    private TransformGroup doorTG;
+    private int collectedKeys = 0;
+
+    private static final Point3f[] KEY_POSITIONS = new Point3f[] {
+            new Point3f(5.5f, FLOOR_Y + 0.45f, 4.8f),
+            new Point3f(-5.8f, FLOOR_Y + 0.45f, -3.8f),
+            new Point3f(2.2f, FLOOR_Y + 0.45f, -9.2f)
     };
 
-    // -- Mutable scene state ------------------------------------------------
-    private int keysFound = 0;
-    private final boolean[]      keyCollected  = { false, false, false };
-    private final BranchGroup[]  keyBGs        = new BranchGroup[3];
-    private final PointLight[]   lanternLights = new PointLight[3];
-    private final Material[]     lanternMats   = new Material[3];
-    private Switch doorSwitch;
-    private JLabel statusLabel;
-
-    // -- Picking ------------------------------------------------------------
-    private PickCanvas pickCanvas;
-
-    // -----------------------------------------------------------------------
+    // =========================================================================
     public RoundtableHold() {
-        super("Roundtable Hold -- Elden Ring");
-        setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
-        setLayout(new BorderLayout());
-
-        statusLabel = new JLabel(
-            "  Find the three keys to open the door.   Keys: 0 / 3",
-            SwingConstants.CENTER);
-        statusLabel.setForeground(new Color(220, 180, 80));
-        statusLabel.setBackground(new Color(10, 8, 15));
-        statusLabel.setOpaque(true);
-        statusLabel.setFont(new Font("Serif", Font.ITALIC, 14));
-        statusLabel.setBorder(BorderFactory.createEmptyBorder(4, 0, 4, 0));
-        add(statusLabel, BorderLayout.SOUTH);
-
+        super("Roundtable Hold — Elden Ring");
+        setDefaultCloseOperation(EXIT_ON_CLOSE);
         setSize(1100, 750);
         setLocationRelativeTo(null);
 
         GraphicsConfiguration gc = SimpleUniverse.getPreferredConfiguration();
         Canvas3D canvas = new Canvas3D(gc);
-        canvas.setFocusable(true);
         add(canvas, BorderLayout.CENTER);
 
         SimpleUniverse universe = new SimpleUniverse(canvas);
+        universe.getViewingPlatform().setNominalViewingTransform();
+        TransformGroup vpTG = universe.getViewingPlatform().getViewPlatformTransform();
+        Transform3D cam = new Transform3D();
+        cam.setTranslation(new Vector3f(0f, PLAYER_EYE_Y, 10.0f));
+        vpTG.setTransform(cam);
 
-        TransformGroup vpTG =
-            universe.getViewingPlatform().getViewPlatformTransform();
-        Transform3D camT = new Transform3D();
-        camT.lookAt(new Point3d(0, 2.5, 10.5),
-                    new Point3d(0, 0, 0),
-                    new Vector3d(0, 1, 0));
-        camT.invert();
-        vpTG.setTransform(camT);
-
-        BranchGroup scene = buildScene(universe, canvas);
+        BranchGroup scene = buildScene(universe, canvas, vpTG);
         scene.compile();
         universe.addBranchGraph(scene);
-
-        pickCanvas = new PickCanvas(canvas, scene);
-        pickCanvas.setMode(PickCanvas.GEOMETRY_INTERSECT_INFO);
-        pickCanvas.setTolerance(4.0f);
-
-        canvas.addMouseListener(new MouseAdapter() {
-            @Override public void mouseClicked(MouseEvent e) { handlePick(e); }
-        });
-
         setVisible(true);
+        canvas.setFocusable(true);
         canvas.requestFocusInWindow();
     }
 
-    // =======================================================================
-    // SCENE GRAPH
-    // =======================================================================
-    private BranchGroup buildScene(SimpleUniverse universe, Canvas3D canvas) {
+    // =========================================================================
+    private BranchGroup buildScene(SimpleUniverse universe, Canvas3D canvas, TransformGroup vpTG) {
         BranchGroup root = new BranchGroup();
-        root.setCapability(BranchGroup.ALLOW_CHILDREN_READ);
-        root.setCapability(BranchGroup.ALLOW_CHILDREN_WRITE);
 
         Background bg = new Background(new Color3f(0.03f, 0.02f, 0.05f));
-        bg.setApplicationBounds(worldBounds());
+        bg.setApplicationBounds(wb());
         root.addChild(bg);
 
-        addLighting(root);
+        addLights(root);
+
         root.addChild(buildRoom());
+        root.addChild(buildArchway());
+        root.addChild(buildHallway());
+        root.addChild(buildSouthArchway());
+        root.addChild(buildSouthHallway());
+        root.addChild(buildDiagArchwayAndHallway(SE_ANGLE));
+        root.addChild(buildDiagArchwayAndHallway(SW_ANGLE));
         root.addChild(buildTable());
         root.addChild(buildGem());
-        root.addChild(buildDoor());
+        root.addChild(buildKeys());
+        root.addChild(buildExitDoor());
 
-        for (int i = 0; i < 3; i++) root.addChild(buildKey(i));
-
-        // First-person video-game style movement.
-        // WASD moves, mouse drag looks, Space moves up, Shift moves down.
-        // This replaces OrbitBehavior and also clamps the camera inside the room.
-        TransformGroup viewTG =
-            universe.getViewingPlatform().getViewPlatformTransform();
-
-        FirstPersonControls controls = new FirstPersonControls(
-            canvas,
-            viewTG,
-            new Vector3f(0f, 0.6f, 10.5f),
-            ROOM_RADIUS - 1.0f,
-            -ROOM_HEIGHT / 2f + 0.5f,
-             ROOM_HEIGHT / 2f - 0.3f);
-        controls.setSchedulingBounds(worldBounds());
-        root.addChild(controls);
+        FirstPersonController controller = new FirstPersonController(vpTG, canvas);
+        controller.setSchedulingBounds(wb());
+        canvas.addKeyListener(controller);
+        canvas.addMouseMotionListener(controller);
+        root.addChild(controller);
 
         return root;
     }
 
-    // -- Lighting -----------------------------------------------------------
-    private void addLighting(BranchGroup root) {
-        AmbientLight ambient = new AmbientLight(AMBIENT_COL);
-        ambient.setInfluencingBounds(worldBounds());
-        root.addChild(ambient);
+    // =========================================================================
+    private void addLights(BranchGroup root) {
+        AmbientLight al = new AmbientLight(AMB_COL);
+        al.setInfluencingBounds(wb());
+        root.addChild(al);
 
-        DirectionalLight fillDown = new DirectionalLight(
-            new Color3f(0.40f, 0.35f, 0.45f), new Vector3f(0f, -1f, 0f));
-        fillDown.setInfluencingBounds(worldBounds());
-        root.addChild(fillDown);
+        PointLight gem = new PointLight(YELLOW, new Point3f(0, GEM_Y, 0),
+                new Point3f(0.08f, 0.04f, 0.01f));
+        gem.setInfluencingBounds(wb());
+        root.addChild(gem);
 
-        DirectionalLight fillUp = new DirectionalLight(
-            new Color3f(0.25f, 0.22f, 0.28f), new Vector3f(0f, 1f, 0f));
-        fillUp.setInfluencingBounds(worldBounds());
-        root.addChild(fillUp);
+        PointLight fill = new PointLight(new Color3f(0.3f, 0.22f, 0.05f),
+                new Point3f(0, TABLE_Y - 0.5f, 0), new Point3f(0.15f, 0.08f, 0));
+        fill.setInfluencingBounds(wb());
+        root.addChild(fill);
 
-        Color3f wallFill = new Color3f(0.30f, 0.26f, 0.32f);
-        float[][] wallDirs = { {1,0,0},{-1,0,0},{0,0,1},{0,0,-1} };
-        for (float[] d : wallDirs) {
-            DirectionalLight wl = new DirectionalLight(
-                wallFill, new Vector3f(d[0], d[1], d[2]));
-            wl.setInfluencingBounds(worldBounds());
-            root.addChild(wl);
+        PointLight hall = new PointLight(new Color3f(0.28f, 0.22f, 0.14f),
+                new Point3f(0, FLOOR_Y + ARCH_TOTAL - 0.8f, NORTH_Z - HALL_DEPTH / 2f),
+                new Point3f(0.06f, 0.04f, 0.003f));
+        hall.setInfluencingBounds(wb());
+        root.addChild(hall);
+
+        PointLight hallS = new PointLight(new Color3f(0.28f, 0.22f, 0.14f),
+                new Point3f(0, FLOOR_Y + ARCH_TOTAL - 0.8f, SOUTH_Z + HALL_DEPTH / 2f),
+                new Point3f(0.06f, 0.04f, 0.003f));
+        hallS.setInfluencingBounds(wb());
+        root.addChild(hallS);
+
+        // Diagonal hallway lights (SE and SW)
+        float dh = HALL_DEPTH / 2f;
+        for (double wa : new double[] { SE_ANGLE, SW_ANGLE }) {
+            float cx = (float) (Math.cos(wa) * (DIAG_CHORD + dh));
+            float cz = (float) (Math.sin(wa) * (DIAG_CHORD + dh));
+            PointLight dl = new PointLight(new Color3f(0.28f, 0.22f, 0.14f),
+                    new Point3f(cx, FLOOR_Y + ARCH_TOTAL - 0.8f, cz),
+                    new Point3f(0.06f, 0.04f, 0.003f));
+            dl.setInfluencingBounds(wb());
+            root.addChild(dl);
         }
 
-        PointLight gemLight = new PointLight(YELLOW_LIGHT,
-            new Point3f(0f, GEM_Y, 0f), new Point3f(0.1f, 0.05f, 0.02f));
-        gemLight.setInfluencingBounds(worldBounds());
-        root.addChild(gemLight);
-
-        PointLight fillLight = new PointLight(
-            new Color3f(0.3f, 0.22f, 0.05f),
-            new Point3f(0f, TABLE_Y - 0.5f, 0f),
-            new Point3f(0.2f, 0.1f, 0.0f));
-        fillLight.setInfluencingBounds(worldBounds());
-        root.addChild(fillLight);
-
-        Color3f torchColor = new Color3f(1.0f, 0.55f, 0.1f);
-        double[] torchAngles = { 0, Math.PI/2, Math.PI, 3*Math.PI/2 };
-        for (double a : torchAngles) {
-            float tx = (ROOM_RADIUS - 0.8f) * (float) Math.cos(a);
-            float tz = (ROOM_RADIUS - 0.8f) * (float) Math.sin(a);
-            PointLight tl = new PointLight(torchColor,
-                new Point3f(tx, 1.2f, tz), new Point3f(0.05f, 0.12f, 0.0f));
-            tl.setInfluencingBounds(worldBounds());
-            root.addChild(tl);
+        Color3f df = new Color3f(0.32f, 0.28f, 0.36f);
+        float[][] dirs = { { 0, -1, 0 }, { 0, 1, 0 }, { 1, 0, 0 }, { -1, 0, 0 }, { 0, 0, 1 }, { 0, 0, -1 } };
+        for (float[] d : dirs) {
+            DirectionalLight dl = new DirectionalLight(df, new Vector3f(d[0], d[1], d[2]));
+            dl.setInfluencingBounds(wb());
+            root.addChild(dl);
         }
     }
 
-    // =======================================================================
-    // ROOM (unchanged from original)
-    // =======================================================================
+    // =========================================================================
+    // ROOM
+    // =========================================================================
     private TransformGroup buildRoom() {
         TransformGroup tg = new TransformGroup();
-        Appearance wallApp = stoneMaterial(
-            new Color3f(0.20f, 0.16f, 0.14f),
-            new Color3f(0.50f, 0.42f, 0.36f));
-        tg.addChild(new Shape3D(
-            buildInwardCylinderGeo(ROOM_RADIUS, ROOM_HEIGHT, ROOM_SEGMENTS), wallApp));
-        tg.addChild(disc(ROOM_RADIUS, ROOM_SEGMENTS, -ROOM_HEIGHT / 2f,
-            stoneMaterialEmissive(
-                new Color3f(0.14f, 0.11f, 0.09f),
-                new Color3f(0.32f, 0.26f, 0.20f),
-                new Color3f(0.18f, 0.14f, 0.10f))));
-        tg.addChild(discFlipped(ROOM_RADIUS, ROOM_SEGMENTS, ROOM_HEIGHT / 2f,
-            stoneMaterialEmissive(
-                new Color3f(0.12f, 0.09f, 0.11f),
-                new Color3f(0.28f, 0.22f, 0.26f),
-                new Color3f(0.14f, 0.11f, 0.13f))));
+
+        Appearance wallApp = matEmissive(c(0.20f, 0.16f, 0.14f), c(0.50f, 0.42f, 0.36f), c(0.08f, 0.06f, 0.05f));
+        Appearance floorApp = matEmissive(c(0.14f, 0.11f, 0.09f), c(0.32f, 0.26f, 0.20f), c(0.16f, 0.12f, 0.09f));
+        Appearance ceilApp = matEmissive(c(0.12f, 0.09f, 0.11f), c(0.28f, 0.22f, 0.26f), c(0.12f, 0.09f, 0.11f));
+
+        tg.addChild(new Shape3D(buildWallGeo(), wallApp));
+        tg.addChild(placedDisc(ROOM_R, 96, 1f, FLOOR_Y, floorApp));
+        tg.addChild(placedDisc(ROOM_R, 96, -1f, CEIL_Y, ceilApp));
+
         return tg;
     }
 
-    private GeometryArray buildInwardCylinderGeo(float r, float h, int seg) {
-        int triCount = seg * 2;
-        TriangleArray geo = new TriangleArray(triCount * 3,
-            GeometryArray.COORDINATES | GeometryArray.NORMALS);
-        float half = h / 2f;
-        float[] coords  = new float[triCount * 3 * 3];
-        float[] normals = new float[triCount * 3 * 3];
-        int idx = 0;
-        for (int i = 0; i < seg; i++) {
-            double a0 = 2.0 * Math.PI * i / seg;
-            double a1 = 2.0 * Math.PI * (i + 1) / seg;
-            float x0=(float)(r*Math.cos(a0)), z0=(float)(r*Math.sin(a0));
-            float x1=(float)(r*Math.cos(a1)), z1=(float)(r*Math.sin(a1));
-            float mx=-(float)(Math.cos((a0+a1)/2));
-            float mz=-(float)(Math.sin((a0+a1)/2));
-            float[][] tri1 = { {x1,-half,z1},{x1,half,z1},{x0,half,z0} };
-            float[][] tri2 = { {x1,-half,z1},{x0,half,z0},{x0,-half,z0} };
-            for (float[][] tri : new float[][][]{tri1, tri2}) {
-                for (float[] v : tri) {
-                    coords[idx]=v[0]; coords[idx+1]=v[1]; coords[idx+2]=v[2];
-                    normals[idx]=mx;  normals[idx+1]=0f;  normals[idx+2]=mz;
-                    idx += 3;
+    /**
+     * Builds the inward-facing cylindrical wall with an upside-down-U hole cut
+     * out on the north face.
+     *
+     * The wall is subdivided into (ROOM_SEGS x WALL_ROWS) cells.
+     * Each cell is skipped if its centre falls inside the arch opening.
+     *
+     * Arch opening (in world space, centred at x=0, on z = -ROOM_R):
+     * • Rectangular base: |x| < ARCH_W/2, FLOOR_Y <= y <= FLOOR_Y+ARCH_SH
+     * • Semicircular top: x²+(y-(FLOOR_Y+ARCH_SH))² < ARCH_CR², upper half
+     */
+    private GeometryArray buildWallGeo() {
+        final int ROWS = 600;
+        ArrayList<float[]> vv = new ArrayList<>(), nn = new ArrayList<>();
+
+        float half = ROOM_H / 2f;
+        // North wall is at a = 3π/2 (x=0, z=-ROOM_R).
+        // South wall is at a = π/2 (x=0, z=+ROOM_R).
+        // Angular half-span of the arch chord on the cylinder surface.
+        double halfSpan = Math.asin((ARCH_W / 2.0) / ROOM_R);
+        double northA = 3.0 * Math.PI / 2.0; // 270°
+        double southA = Math.PI / 2.0; // 90°
+        double[] holeAngles = { northA, southA, SE_ANGLE, SW_ANGLE };
+
+        for (int si = 0; si < ROOM_SEGS; si++) {
+            double a0 = 2.0 * Math.PI * si / ROOM_SEGS;
+            double a1 = 2.0 * Math.PI * (si + 1) / ROOM_SEGS;
+            double aMid = (a0 + a1) / 2.0;
+
+            float x0 = (float) (ROOM_R * Math.cos(a0)), z0 = (float) (ROOM_R * Math.sin(a0));
+            float x1 = (float) (ROOM_R * Math.cos(a1)), z1 = (float) (ROOM_R * Math.sin(a1));
+            float nx = -(float) Math.cos(aMid), nz = -(float) Math.sin(aMid);
+
+            for (int ri = 0; ri < ROWS; ri++) {
+                float y0 = -half + ROOM_H * ri / ROWS;
+                float y1 = -half + ROOM_H * (ri + 1) / ROWS;
+
+                // Check this cell against every hole angle generically.
+                // For a hole at angle holeA, the lateral (X-like) offset of a wall
+                // point is its projection onto the tangent of holeA:
+                // cellX = -wx*sin(holeA) + wz*cos(holeA)
+                boolean skip = false;
+                for (double holeA : holeAngles) {
+                    double d = Math.abs(aMid - holeA) % (2 * Math.PI);
+                    if (d > Math.PI)
+                        d = 2 * Math.PI - d;
+                    if (d < halfSpan + 0.05) {
+                        float wx = (float) (ROOM_R * Math.cos(aMid));
+                        float wz2 = (float) (ROOM_R * Math.sin(aMid));
+                        float cellX = (float) (-wx * Math.sin(holeA) + wz2 * Math.cos(holeA));
+                        float cellY = (y0 + y1) / 2f;
+                        if (insideArch(cellX, cellY)) {
+                            skip = true;
+                            break;
+                        }
+                    }
                 }
+                if (skip)
+                    continue;
+
+                // emit inward-facing quad (two triangles)
+                addTriN(vv, nn, nx, 0, nz, p(x1, y0, z1), p(x1, y1, z1), p(x0, y1, z0));
+                addTriN(vv, nn, nx, 0, nz, p(x1, y0, z1), p(x0, y1, z0), p(x0, y0, z0));
             }
         }
-        geo.setCoordinates(0, coords);
-        geo.setNormals(0, normals);
-        return geo;
+        return listToGeo(vv, nn);
     }
 
-    private TransformGroup disc(float radius, int seg, float y, Appearance app) {
+    /** True if (wx, wy) is inside the arch-shaped opening profile. */
+    private boolean insideArch(float wx, float wy) {
+        if (Math.abs(wx) > ARCH_W / 2f)
+            return false;
+        float archBase = FLOOR_Y;
+        if (wy < archBase)
+            return false;
+        if (wy <= archBase + ARCH_SH)
+            return true; // rectangular part
+        // semicircular cap
+        float dy = wy - (archBase + ARCH_SH);
+        return (wx * wx + dy * dy) < ARCH_CR * ARCH_CR;
+    }
+
+    // =========================================================================
+    // ARCHWAY TRIM
+    // =========================================================================
+    private TransformGroup buildArchway() {
         TransformGroup tg = new TransformGroup();
-        Transform3D t = new Transform3D();
-        t.setTranslation(new Vector3f(0f, y, 0f));
-        tg.setTransform(t);
-        tg.addChild(new Shape3D(buildDiscGeo(radius, seg, 1f), app));
-        return tg;
-    }
+        Appearance stone = matEmissive(c(0.24f, 0.19f, 0.16f), c(0.58f, 0.48f, 0.40f), c(0.16f, 0.13f, 0.10f));
 
-    private TransformGroup discFlipped(float radius, int seg, float y, Appearance app) {
-        TransformGroup tg = new TransformGroup();
-        Transform3D t = new Transform3D();
-        t.setTranslation(new Vector3f(0f, y, 0f));
-        tg.setTransform(t);
-        tg.addChild(new Shape3D(buildDiscGeo(radius, seg, -1f), app));
-        return tg;
-    }
+        // The trim ring sits on the room-facing side of the north wall (z = NORTH_Z +
+        // epsilon)
+        float z = NORTH_Z + 0.03f;
+        float zB = z - ARCH_TRIM; // back face of trim (into the wall / hallway side)
 
-    private GeometryArray buildDiscGeo(float radius, int seg, float normalY) {
-        int vCount = seg + 2;
-        TriangleFanArray geo = new TriangleFanArray(vCount,
-            GeometryArray.COORDINATES | GeometryArray.NORMALS, new int[]{vCount});
-        float[] coords  = new float[vCount * 3];
-        float[] normals = new float[vCount * 3];
-        coords[0]=0; coords[1]=0; coords[2]=0;
-        normals[0]=0; normals[1]=normalY; normals[2]=0;
-        for (int i = 0; i <= seg; i++) {
-            double angle = normalY > 0
-                ? 2.0 * Math.PI * i / seg
-                : -2.0 * Math.PI * i / seg;
-            int base = (i + 1) * 3;
-            coords[base]   = (float)(radius * Math.cos(angle));
-            coords[base+1] = 0;
-            coords[base+2] = (float)(radius * Math.sin(angle));
-            normals[base]=0; normals[base+1]=normalY; normals[base+2]=0;
+        float inner = ARCH_W / 2f;
+        float outer = inner + ARCH_TRIM;
+        float base = FLOOR_Y;
+        float top = base + ARCH_SH;
+        float archCY = top; // semicircle centre Y
+
+        // ── room-facing face of the trim (flat, normal +Z) ────────────────────
+        ArrayList<float[]> fv = new ArrayList<>(), fn = new ArrayList<>();
+
+        // Left bar
+        addQuadN(fv, fn, 0, 0, 1,
+                p(-outer, base, z), p(-inner, base, z), p(-inner, top, z), p(-outer, top, z));
+        // Right bar
+        addQuadN(fv, fn, 0, 0, 1,
+                p(inner, base, z), p(outer, base, z), p(outer, top, z), p(inner, top, z));
+        // Semicircular ring (outer - inner)
+        int segs = 32;
+        for (int i = 0; i < segs; i++) {
+            double a0 = Math.PI * i / segs;
+            double a1 = Math.PI * (i + 1) / segs;
+            float ox0 = 0 + (outer * (float) Math.cos(a0)), oy0 = archCY + (outer * (float) Math.sin(a0));
+            float ox1 = 0 + (outer * (float) Math.cos(a1)), oy1 = archCY + (outer * (float) Math.sin(a1));
+            float ix0 = 0 + (inner * (float) Math.cos(a0)), iy0 = archCY + (inner * (float) Math.sin(a0));
+            float ix1 = 0 + (inner * (float) Math.cos(a1)), iy1 = archCY + (inner * (float) Math.sin(a1));
+            addTriN(fv, fn, 0, 0, 1, p(ox0, oy0, z), p(ox1, oy1, z), p(ix1, iy1, z));
+            addTriN(fv, fn, 0, 0, 1, p(ox0, oy0, z), p(ix1, iy1, z), p(ix0, iy0, z));
         }
-        geo.setCoordinates(0, coords);
-        geo.setNormals(0, normals);
-        return geo;
+        tg.addChild(new Shape3D(listToGeo(fv, fn), stone));
+
+        // ── inner edge of the trim (the soffit — faces the opening interior) ──
+        // This is the face you see when standing in the opening looking up.
+        // Left inner edge face (normal +X)
+        ArrayList<float[]> sv = new ArrayList<>(), sn = new ArrayList<>();
+        addQuadN(sv, sn, 1, 0, 0,
+                p(-inner, base, zB), p(-inner, base, z), p(-inner, top, z), p(-inner, top, zB));
+        // Right inner edge face (normal -X)
+        addQuadN(sv, sn, -1, 0, 0,
+                p(inner, base, z), p(inner, base, zB), p(inner, top, zB), p(inner, top, z));
+        // Semicircular inner soffit (curved, inward-facing radial normals)
+        for (int i = 0; i < segs; i++) {
+            double a0 = Math.PI * i / segs;
+            double a1 = Math.PI * (i + 1) / segs;
+            float ix0 = 0 + (inner * (float) Math.cos(a0)), iy0 = archCY + (inner * (float) Math.sin(a0));
+            float ix1 = 0 + (inner * (float) Math.cos(a1)), iy1 = archCY + (inner * (float) Math.sin(a1));
+            // inward normal = toward arch centre = negative radial
+            float inx = -(float) Math.cos((a0 + a1) / 2), iny = -(float) Math.sin((a0 + a1) / 2);
+            addTriN(sv, sn, inx, iny, 0, p(ix0, iy0, z), p(ix1, iy1, z), p(ix1, iy1, zB));
+            addTriN(sv, sn, inx, iny, 0, p(ix0, iy0, z), p(ix1, iy1, zB), p(ix0, iy0, zB));
+        }
+        tg.addChild(new Shape3D(listToGeo(sv, sn), stone));
+
+        // ── outer edge soffit (the outer ring face visible from outside) ───────
+        // (small face at top of outer arc facing away from centre — mostly hidden)
+        ArrayList<float[]> ov = new ArrayList<>(), on2 = new ArrayList<>();
+        for (int i = 0; i < segs; i++) {
+            double a0 = Math.PI * i / segs;
+            double a1 = Math.PI * (i + 1) / segs;
+            float ox0 = 0 + (outer * (float) Math.cos(a0)), oy0 = archCY + (outer * (float) Math.sin(a0));
+            float ox1 = 0 + (outer * (float) Math.cos(a1)), oy1 = archCY + (outer * (float) Math.sin(a1));
+            float onx = (float) Math.cos((a0 + a1) / 2), ony = (float) Math.sin((a0 + a1) / 2);
+            addTriN(ov, on2, onx, ony, 0, p(ox0, oy0, zB), p(ox1, oy1, zB), p(ox1, oy1, z));
+            addTriN(ov, on2, onx, ony, 0, p(ox0, oy0, zB), p(ox1, oy1, z), p(ox0, oy0, z));
+        }
+        // left outer bar side (faces -X)
+        addQuadN(ov, on2, -1, 0, 0,
+                p(-outer, top, z), p(-outer, top, zB), p(-outer, base, zB), p(-outer, base, z));
+        // right outer bar side (faces +X)
+        addQuadN(ov, on2, 1, 0, 0,
+                p(outer, base, z), p(outer, base, zB), p(outer, top, zB), p(outer, top, z));
+        tg.addChild(new Shape3D(listToGeo(ov, on2), stone));
+
+        // ── top face of the trim bars (horizontal ledge, normal +Y) ──────────
+        ArrayList<float[]> tv = new ArrayList<>(), tn = new ArrayList<>();
+        addQuadN(tv, tn, 0, 1, 0,
+                p(-outer, top, zB), p(-inner, top, zB), p(-inner, top, z), p(-outer, top, z));
+        addQuadN(tv, tn, 0, 1, 0,
+                p(inner, top, zB), p(outer, top, zB), p(outer, top, z), p(inner, top, z));
+        tg.addChild(new Shape3D(listToGeo(tv, tn), stone));
+
+        return tg;
     }
 
-    // =======================================================================
-    // TABLE (unchanged from original)
-    // =======================================================================
+    // =========================================================================
+    // HALLWAY
+    // =========================================================================
+    private TransformGroup buildHallway() {
+        TransformGroup tg = new TransformGroup();
+        Appearance stone = matEmissive(c(0.18f, 0.14f, 0.12f), c(0.42f, 0.34f, 0.28f), c(0.12f, 0.09f, 0.07f));
+
+        float hw = ARCH_W / 2f; // half-width
+        float flY = FLOOR_Y;
+        float ceY = FLOOR_Y + ARCH_TOTAL; // ceiling height matches arch top
+        float z0 = NORTH_Z;
+        float z1 = HALL_END_Z;
+
+        // Left wall (normal -X from inside)
+        tg.addChild(new Shape3D(quadGeo(
+                p(-hw, flY, z1), p(-hw, ceY, z1), p(-hw, ceY, z0), p(-hw, flY, z0),
+                new float[] { 1, 0, 0 }), stone));
+        // Right wall (normal +X from inside)
+        tg.addChild(new Shape3D(quadGeo(
+                p(hw, flY, z0), p(hw, ceY, z0), p(hw, ceY, z1), p(hw, flY, z1),
+                new float[] { -1, 0, 0 }), stone));
+        // Floor
+        tg.addChild(new Shape3D(quadGeo(
+                p(-hw, flY, z0), p(hw, flY, z0), p(hw, flY, z1), p(-hw, flY, z1),
+                new float[] { 0, 1, 0 }), stone));
+        // Back (end) wall
+        tg.addChild(new Shape3D(quadGeo(
+                p(-hw, flY, z1), p(-hw, ceY, z1), p(hw, ceY, z1), p(hw, flY, z1),
+                new float[] { 0, 0, 1 }), stone));
+        // Flat ceiling above the straight portion
+        tg.addChild(new Shape3D(quadGeo(
+                p(-hw, ceY, z0), p(-hw, ceY, z1), p(hw, ceY, z1), p(hw, ceY, z0),
+                new float[] { 0, -1, 0 }), stone));
+
+        // Curved arch ceiling inside the hallway (follows semicircle profile)
+        tg.addChild(new Shape3D(buildArchCeilingGeo(z0, z1), stone));
+
+        // ── darkening fog planes ───────────────────────────────────────────────
+        int FOG_COUNT = 8;
+        float planeW = ARCH_W * 2.5f;
+        float planeH = ARCH_TOTAL * 2f;
+        float alpha = 0.70f;
+
+        Appearance fog = new Appearance();
+        fog.setColoringAttributes(new ColoringAttributes(0f, 0f, 0f, ColoringAttributes.SHADE_FLAT));
+        fog.setTransparencyAttributes(new TransparencyAttributes(
+                TransparencyAttributes.BLENDED, alpha));
+        PolygonAttributes pa = new PolygonAttributes();
+        pa.setCullFace(PolygonAttributes.CULL_NONE);
+        fog.setPolygonAttributes(pa);
+        RenderingAttributes ra = new RenderingAttributes();
+        ra.setDepthBufferWriteEnable(false);
+        fog.setRenderingAttributes(ra);
+
+        for (int i = 0; i < FOG_COUNT; i++) {
+            float t = (i + 1f) / (FOG_COUNT + 1f);
+            float planeZ = z0 + (z1 - z0) * t;
+            float px = planeW / 2f;
+            float pyB = flY - (planeH - ARCH_TOTAL) / 2f;
+            float pyT = pyB + planeH;
+
+            tg.addChild(new Shape3D(quadGeo(
+                    p(-px, pyB, planeZ), p(px, pyB, planeZ),
+                    p(px, pyT, planeZ), p(-px, pyT, planeZ),
+                    new float[] { 0, 0, 1 }), fog));
+        }
+
+        return tg;
+    }
+
+    // =========================================================================
+    // SOUTH ARCHWAY TRIM (mirror of north, faces -Z into room)
+    // =========================================================================
+    private TransformGroup buildSouthArchway() {
+        TransformGroup tg = new TransformGroup();
+        Appearance stone = matEmissive(c(0.24f, 0.19f, 0.16f), c(0.58f, 0.48f, 0.40f), c(0.16f, 0.13f, 0.10f));
+
+        float z = SOUTH_Z - 0.03f; // room-facing side of south wall (faces -Z)
+        float zB = z + ARCH_TRIM; // back face of trim (into south hallway = +Z)
+
+        float inner = ARCH_W / 2f;
+        float outer = inner + ARCH_TRIM;
+        float base = FLOOR_Y;
+        float top = base + ARCH_SH;
+        float archCY = top;
+        int segs = 32;
+
+        // room-facing face (normal -Z)
+        ArrayList<float[]> fv = new ArrayList<>(), fn = new ArrayList<>();
+        addQuadN(fv, fn, 0, 0, -1, p(-inner, base, z), p(-outer, base, z), p(-outer, top, z), p(-inner, top, z));
+        addQuadN(fv, fn, 0, 0, -1, p(outer, base, z), p(inner, base, z), p(inner, top, z), p(outer, top, z));
+        for (int i = 0; i < segs; i++) {
+            double a0 = Math.PI * i / segs, a1 = Math.PI * (i + 1) / segs;
+            float ox0 = outer * (float) Math.cos(a0), oy0 = archCY + outer * (float) Math.sin(a0);
+            float ox1 = outer * (float) Math.cos(a1), oy1 = archCY + outer * (float) Math.sin(a1);
+            float ix0 = inner * (float) Math.cos(a0), iy0 = archCY + inner * (float) Math.sin(a0);
+            float ix1 = inner * (float) Math.cos(a1), iy1 = archCY + inner * (float) Math.sin(a1);
+            addTriN(fv, fn, 0, 0, -1, p(ox1, oy1, z), p(ox0, oy0, z), p(ix0, iy0, z));
+            addTriN(fv, fn, 0, 0, -1, p(ox1, oy1, z), p(ix0, iy0, z), p(ix1, iy1, z));
+        }
+        tg.addChild(new Shape3D(listToGeo(fv, fn), stone));
+
+        // inner soffit
+        ArrayList<float[]> sv = new ArrayList<>(), sn = new ArrayList<>();
+        addQuadN(sv, sn, 1, 0, 0, p(-inner, base, z), p(-inner, base, zB), p(-inner, top, zB), p(-inner, top, z));
+        addQuadN(sv, sn, -1, 0, 0, p(inner, base, zB), p(inner, base, z), p(inner, top, z), p(inner, top, zB));
+        for (int i = 0; i < segs; i++) {
+            double a0 = Math.PI * i / segs, a1 = Math.PI * (i + 1) / segs;
+            float ix0 = inner * (float) Math.cos(a0), iy0 = archCY + inner * (float) Math.sin(a0);
+            float ix1 = inner * (float) Math.cos(a1), iy1 = archCY + inner * (float) Math.sin(a1);
+            float inx = -(float) Math.cos((a0 + a1) / 2), iny = -(float) Math.sin((a0 + a1) / 2);
+            addTriN(sv, sn, inx, iny, 0, p(ix1, iy1, z), p(ix0, iy0, z), p(ix0, iy0, zB));
+            addTriN(sv, sn, inx, iny, 0, p(ix1, iy1, z), p(ix0, iy0, zB), p(ix1, iy1, zB));
+        }
+        tg.addChild(new Shape3D(listToGeo(sv, sn), stone));
+
+        // outer edge
+        ArrayList<float[]> ov = new ArrayList<>(), on2 = new ArrayList<>();
+        for (int i = 0; i < segs; i++) {
+            double a0 = Math.PI * i / segs, a1 = Math.PI * (i + 1) / segs;
+            float ox0 = outer * (float) Math.cos(a0), oy0 = archCY + outer * (float) Math.sin(a0);
+            float ox1 = outer * (float) Math.cos(a1), oy1 = archCY + outer * (float) Math.sin(a1);
+            float onx = (float) Math.cos((a0 + a1) / 2), ony = (float) Math.sin((a0 + a1) / 2);
+            addTriN(ov, on2, onx, ony, 0, p(ox1, oy1, z), p(ox0, oy0, z), p(ox0, oy0, zB));
+            addTriN(ov, on2, onx, ony, 0, p(ox1, oy1, z), p(ox0, oy0, zB), p(ox1, oy1, zB));
+        }
+        addQuadN(ov, on2, -1, 0, 0, p(-outer, base, z), p(-outer, base, zB), p(-outer, top, zB), p(-outer, top, z));
+        addQuadN(ov, on2, 1, 0, 0, p(outer, top, z), p(outer, top, zB), p(outer, base, zB), p(outer, base, z));
+        tg.addChild(new Shape3D(listToGeo(ov, on2), stone));
+
+        // top ledge
+        ArrayList<float[]> tv = new ArrayList<>(), tn = new ArrayList<>();
+        addQuadN(tv, tn, 0, 1, 0, p(-inner, top, z), p(-outer, top, z), p(-outer, top, zB), p(-inner, top, zB));
+        addQuadN(tv, tn, 0, 1, 0, p(outer, top, z), p(inner, top, z), p(inner, top, zB), p(outer, top, zB));
+        tg.addChild(new Shape3D(listToGeo(tv, tn), stone));
+
+        return tg;
+    }
+
+    // =========================================================================
+    // SOUTH HALLWAY (mirror of north, extends in +Z direction)
+    // =========================================================================
+    private TransformGroup buildSouthHallway() {
+        TransformGroup tg = new TransformGroup();
+        Appearance stone = matEmissive(c(0.18f, 0.14f, 0.12f), c(0.42f, 0.34f, 0.28f), c(0.12f, 0.09f, 0.07f));
+
+        float hw = ARCH_W / 2f;
+        float flY = FLOOR_Y;
+        float ceY = FLOOR_Y + ARCH_TOTAL;
+        float z0 = SOUTH_Z; // room-side entrance
+        float z1 = SOUTH_END_Z; // far end (+Z direction)
+
+        // Left wall
+        tg.addChild(new Shape3D(quadGeo(
+                p(-hw, flY, z0), p(-hw, ceY, z0), p(-hw, ceY, z1), p(-hw, flY, z1),
+                new float[] { 1, 0, 0 }), stone));
+        // Right wall
+        tg.addChild(new Shape3D(quadGeo(
+                p(hw, flY, z1), p(hw, ceY, z1), p(hw, ceY, z0), p(hw, flY, z0),
+                new float[] { -1, 0, 0 }), stone));
+        // Floor
+        tg.addChild(new Shape3D(quadGeo(
+                p(-hw, flY, z1), p(hw, flY, z1), p(hw, flY, z0), p(-hw, flY, z0),
+                new float[] { 0, 1, 0 }), stone));
+        // Back (end) wall — faces -Z
+        tg.addChild(new Shape3D(quadGeo(
+                p(hw, flY, z1), p(hw, ceY, z1), p(-hw, ceY, z1), p(-hw, flY, z1),
+                new float[] { 0, 0, -1 }), stone));
+        // Flat ceiling
+        tg.addChild(new Shape3D(quadGeo(
+                p(-hw, ceY, z1), p(hw, ceY, z1), p(hw, ceY, z0), p(-hw, ceY, z0),
+                new float[] { 0, -1, 0 }), stone));
+
+        // Curved arch ceiling
+        tg.addChild(new Shape3D(buildArchCeilingGeo(z0, z1), stone));
+
+        // Fog planes
+        int FOG_COUNT = 8;
+        float planeW = ARCH_W * 2.5f;
+        float planeH = ARCH_TOTAL * 2f;
+        float alpha = 0.70f;
+
+        Appearance fog = new Appearance();
+        fog.setColoringAttributes(new ColoringAttributes(0f, 0f, 0f, ColoringAttributes.SHADE_FLAT));
+        fog.setTransparencyAttributes(new TransparencyAttributes(TransparencyAttributes.BLENDED, alpha));
+        PolygonAttributes pa = new PolygonAttributes();
+        pa.setCullFace(PolygonAttributes.CULL_NONE);
+        fog.setPolygonAttributes(pa);
+        RenderingAttributes ra = new RenderingAttributes();
+        ra.setDepthBufferWriteEnable(false);
+        fog.setRenderingAttributes(ra);
+
+        for (int i = 0; i < FOG_COUNT; i++) {
+            float t = (i + 1f) / (FOG_COUNT + 1f);
+            float planeZ = z0 + (z1 - z0) * t; // z0→z1 is in +Z direction
+            float px = planeW / 2f;
+            float pyB = flY - (planeH - ARCH_TOTAL) / 2f;
+            float pyT = pyB + planeH;
+            tg.addChild(new Shape3D(quadGeo(
+                    p(-px, pyB, planeZ), p(px, pyB, planeZ),
+                    p(px, pyT, planeZ), p(-px, pyT, planeZ),
+                    new float[] { 0, 0, -1 }), fog));
+        }
+
+        return tg;
+    }
+
+    // =========================================================================
+    // DIAGONAL ARCHWAY + HALLWAY (SE or SW, built as north then Y-rotated)
+    // =========================================================================
+    /**
+     * Builds an archway + hallway identical to the north one, then rotates the
+     * entire assembly around Y so it faces the given wall angle.
+     * North in the cylinder is a=3π/2. A rotation of (wallAngle - 3π/2) around
+     * Y maps the north-facing geometry to wallAngle.
+     */
+    private TransformGroup buildDiagArchwayAndHallway(double wallAngle) {
+        // Rotation angle to map "facing -Z (north)" to wallAngle
+        double rotY = wallAngle - (3.0 * Math.PI / 2.0);
+
+        Transform3D rot = new Transform3D();
+        rot.rotY(rotY);
+        TransformGroup tg = new TransformGroup(rot);
+
+        // Reuse north archway geometry (it faces -Z / north)
+        tg.addChild(buildNorthArchway());
+        tg.addChild(buildNorthHallway());
+
+        return tg;
+    }
+
+    /**
+     * Builds the north archway trim exactly as buildArchway() does —
+     * extracted so it can be reused by the diagonal builder.
+     */
+    private TransformGroup buildNorthArchway() {
+        TransformGroup tg = new TransformGroup();
+        Appearance stone = matEmissive(c(0.24f, 0.19f, 0.16f), c(0.58f, 0.48f, 0.40f), c(0.16f, 0.13f, 0.10f));
+
+        float z = NORTH_Z + 0.03f;
+        float zB = z - ARCH_TRIM;
+        float inner = ARCH_W / 2f, outer = inner + ARCH_TRIM;
+        float base = FLOOR_Y, top = base + ARCH_SH, archCY = top;
+        int segs = 32;
+
+        ArrayList<float[]> fv = new ArrayList<>(), fn = new ArrayList<>();
+        addQuadN(fv, fn, 0, 0, 1, p(-outer, base, z), p(-inner, base, z), p(-inner, top, z), p(-outer, top, z));
+        addQuadN(fv, fn, 0, 0, 1, p(inner, base, z), p(outer, base, z), p(outer, top, z), p(inner, top, z));
+        for (int i = 0; i < segs; i++) {
+            double a0 = Math.PI * i / segs, a1 = Math.PI * (i + 1) / segs;
+            float ox0 = outer * (float) Math.cos(a0), oy0 = archCY + outer * (float) Math.sin(a0);
+            float ox1 = outer * (float) Math.cos(a1), oy1 = archCY + outer * (float) Math.sin(a1);
+            float ix0 = inner * (float) Math.cos(a0), iy0 = archCY + inner * (float) Math.sin(a0);
+            float ix1 = inner * (float) Math.cos(a1), iy1 = archCY + inner * (float) Math.sin(a1);
+            addTriN(fv, fn, 0, 0, 1, p(ox0, oy0, z), p(ox1, oy1, z), p(ix1, iy1, z));
+            addTriN(fv, fn, 0, 0, 1, p(ox0, oy0, z), p(ix1, iy1, z), p(ix0, iy0, z));
+        }
+        tg.addChild(new Shape3D(listToGeo(fv, fn), stone));
+
+        ArrayList<float[]> sv = new ArrayList<>(), sn = new ArrayList<>();
+        addQuadN(sv, sn, 1, 0, 0, p(-inner, base, zB), p(-inner, base, z), p(-inner, top, z), p(-inner, top, zB));
+        addQuadN(sv, sn, -1, 0, 0, p(inner, base, z), p(inner, base, zB), p(inner, top, zB), p(inner, top, z));
+        for (int i = 0; i < segs; i++) {
+            double a0 = Math.PI * i / segs, a1 = Math.PI * (i + 1) / segs;
+            float ix0 = inner * (float) Math.cos(a0), iy0 = archCY + inner * (float) Math.sin(a0);
+            float ix1 = inner * (float) Math.cos(a1), iy1 = archCY + inner * (float) Math.sin(a1);
+            float inx = -(float) Math.cos((a0 + a1) / 2), iny = -(float) Math.sin((a0 + a1) / 2);
+            addTriN(sv, sn, inx, iny, 0, p(ix0, iy0, z), p(ix1, iy1, z), p(ix1, iy1, zB));
+            addTriN(sv, sn, inx, iny, 0, p(ix0, iy0, z), p(ix1, iy1, zB), p(ix0, iy0, zB));
+        }
+        tg.addChild(new Shape3D(listToGeo(sv, sn), stone));
+
+        ArrayList<float[]> ov = new ArrayList<>(), on2 = new ArrayList<>();
+        for (int i = 0; i < segs; i++) {
+            double a0 = Math.PI * i / segs, a1 = Math.PI * (i + 1) / segs;
+            float ox0 = outer * (float) Math.cos(a0), oy0 = archCY + outer * (float) Math.sin(a0);
+            float ox1 = outer * (float) Math.cos(a1), oy1 = archCY + outer * (float) Math.sin(a1);
+            float onx = (float) Math.cos((a0 + a1) / 2), ony = (float) Math.sin((a0 + a1) / 2);
+            addTriN(ov, on2, onx, ony, 0, p(ox0, oy0, zB), p(ox1, oy1, zB), p(ox1, oy1, z));
+            addTriN(ov, on2, onx, ony, 0, p(ox0, oy0, zB), p(ox1, oy1, z), p(ox0, oy0, z));
+        }
+        addQuadN(ov, on2, -1, 0, 0, p(-outer, top, z), p(-outer, top, zB), p(-outer, base, zB), p(-outer, base, z));
+        addQuadN(ov, on2, 1, 0, 0, p(outer, base, z), p(outer, base, zB), p(outer, top, zB), p(outer, top, z));
+        tg.addChild(new Shape3D(listToGeo(ov, on2), stone));
+
+        ArrayList<float[]> tv = new ArrayList<>(), tn = new ArrayList<>();
+        addQuadN(tv, tn, 0, 1, 0, p(-outer, top, zB), p(-inner, top, zB), p(-inner, top, z), p(-outer, top, z));
+        addQuadN(tv, tn, 0, 1, 0, p(inner, top, zB), p(outer, top, zB), p(outer, top, z), p(inner, top, z));
+        tg.addChild(new Shape3D(listToGeo(tv, tn), stone));
+
+        return tg;
+    }
+
+    /**
+     * Builds the north hallway exactly as buildHallway() does —
+     * extracted so it can be reused by the diagonal builder.
+     */
+    private TransformGroup buildNorthHallway() {
+        TransformGroup tg = new TransformGroup();
+        Appearance stone = matEmissive(c(0.18f, 0.14f, 0.12f), c(0.42f, 0.34f, 0.28f), c(0.12f, 0.09f, 0.07f));
+
+        float hw = ARCH_W / 2f;
+        float flY = FLOOR_Y;
+        float ceY = FLOOR_Y + ARCH_TOTAL;
+        float z0 = NORTH_Z;
+        float z1 = HALL_END_Z;
+
+        tg.addChild(new Shape3D(quadGeo(
+                p(-hw, flY, z1), p(-hw, ceY, z1), p(-hw, ceY, z0), p(-hw, flY, z0), new float[] { 1, 0, 0 }), stone));
+        tg.addChild(new Shape3D(quadGeo(
+                p(hw, flY, z0), p(hw, ceY, z0), p(hw, ceY, z1), p(hw, flY, z1), new float[] { -1, 0, 0 }), stone));
+        tg.addChild(new Shape3D(quadGeo(
+                p(-hw, flY, z0), p(hw, flY, z0), p(hw, flY, z1), p(-hw, flY, z1), new float[] { 0, 1, 0 }), stone));
+        tg.addChild(new Shape3D(quadGeo(
+                p(-hw, flY, z1), p(-hw, ceY, z1), p(hw, ceY, z1), p(hw, flY, z1), new float[] { 0, 0, 1 }), stone));
+        tg.addChild(new Shape3D(quadGeo(
+                p(-hw, ceY, z0), p(-hw, ceY, z1), p(hw, ceY, z1), p(hw, ceY, z0), new float[] { 0, -1, 0 }), stone));
+        tg.addChild(new Shape3D(buildArchCeilingGeo(z0, z1), stone));
+
+        // Fog planes
+        int FOG_COUNT = 8;
+        float planeW = ARCH_W * 2.5f;
+        float planeH = ARCH_TOTAL * 2f;
+
+        Appearance fog = new Appearance();
+        fog.setColoringAttributes(new ColoringAttributes(0f, 0f, 0f, ColoringAttributes.SHADE_FLAT));
+        fog.setTransparencyAttributes(new TransparencyAttributes(TransparencyAttributes.BLENDED, 0.70f));
+        PolygonAttributes pa = new PolygonAttributes();
+        pa.setCullFace(PolygonAttributes.CULL_NONE);
+        fog.setPolygonAttributes(pa);
+        RenderingAttributes ra = new RenderingAttributes();
+        ra.setDepthBufferWriteEnable(false);
+        fog.setRenderingAttributes(ra);
+
+        for (int i = 0; i < FOG_COUNT; i++) {
+            float t = (i + 1f) / (FOG_COUNT + 1f);
+            float planeZ = z0 + (z1 - z0) * t;
+            float px = planeW / 2f;
+            float pyB = flY - (planeH - ARCH_TOTAL) / 2f;
+            float pyT = pyB + planeH;
+            tg.addChild(new Shape3D(quadGeo(
+                    p(-px, pyB, planeZ), p(px, pyB, planeZ),
+                    p(px, pyT, planeZ), p(-px, pyT, planeZ),
+                    new float[] { 0, 0, 1 }), fog));
+        }
+        return tg;
+    }
+
+    /**
+     * Curved ceiling strip that follows the arch semicircle through the hallway.
+     */
+    private GeometryArray buildArchCeilingGeo(float z0, float z1) {
+        int segs = 32;
+        float archCY = FLOOR_Y + ARCH_SH;
+        ArrayList<float[]> vv = new ArrayList<>(), nn = new ArrayList<>();
+        for (int i = 0; i < segs; i++) {
+            double a0 = Math.PI * i / segs;
+            double a1 = Math.PI * (i + 1) / segs;
+            float x0 = ARCH_CR * (float) Math.cos(a0), y0 = archCY + ARCH_CR * (float) Math.sin(a0);
+            float x1 = ARCH_CR * (float) Math.cos(a1), y1 = archCY + ARCH_CR * (float) Math.sin(a1);
+            // inward-facing normal (toward interior = negative radial)
+            float nx = -(float) Math.cos((a0 + a1) / 2), ny = -(float) Math.sin((a0 + a1) / 2);
+            addTriN(vv, nn, nx, ny, 0, p(x0, y0, z0), p(x1, y1, z0), p(x1, y1, z1));
+            addTriN(vv, nn, nx, ny, 0, p(x0, y0, z0), p(x1, y1, z1), p(x0, y0, z1));
+        }
+        return listToGeo(vv, nn);
+    }
+
+    // =========================================================================
+    // TABLE
+    // =========================================================================
     private TransformGroup buildTable() {
         TransformGroup tg = new TransformGroup();
-        Appearance woodApp = stoneMaterial(
-            new Color3f(0.15f, 0.09f, 0.05f),
-            new Color3f(0.38f, 0.24f, 0.14f));
-        Cylinder top = new Cylinder(TABLE_RADIUS, TABLE_HEIGHT,
-            Cylinder.GENERATE_NORMALS, TABLE_SEGMENTS, 1, woodApp);
-        TransformGroup topTG = new TransformGroup();
-        Transform3D topT = new Transform3D();
-        topT.setTranslation(new Vector3f(0f, TABLE_Y, 0f));
-        topTG.setTransform(topT);
-        topTG.addChild(top);
-        tg.addChild(topTG);
-        float legDist = TABLE_RADIUS * 0.6f;
-        float[][] offsets = {
-            { legDist, legDist},{-legDist, legDist},
-            {-legDist,-legDist},{ legDist,-legDist}
-        };
-        for (float[] off : offsets) tg.addChild(tableLeg(off[0], off[1], woodApp));
+        Appearance wood = matEmissive(c(0.15f, 0.09f, 0.05f), c(0.40f, 0.26f, 0.14f), c(0.08f, 0.05f, 0.02f));
+
+        Cylinder top = new Cylinder(TABLE_R, TABLE_H, Cylinder.GENERATE_NORMALS, 48, 1, wood);
+        tg.addChild(translated(0, TABLE_Y, 0, top));
+
+        float ld = TABLE_R * 0.6f;
+        for (float[] o : new float[][] { { ld, ld }, { -ld, ld }, { -ld, -ld }, { ld, -ld } }) {
+            tg.addChild(translated(o[0], LEG_Y, o[1],
+                    new Cylinder(LEG_R, LEG_H, Cylinder.GENERATE_NORMALS, 12, 1, wood)));
+        }
         return tg;
     }
 
-    private TransformGroup tableLeg(float x, float z, Appearance app) {
-        Cylinder leg = new Cylinder(LEG_RADIUS, LEG_HEIGHT,
-            Cylinder.GENERATE_NORMALS, 12, 1, app);
-        Transform3D t = new Transform3D();
-        t.setTranslation(new Vector3f(x, LEG_Y, z));
-        TransformGroup tg = new TransformGroup(t);
-        tg.addChild(leg);
-        return tg;
-    }
-
-    // =======================================================================
-    // GEM (unchanged from original)
-    // =======================================================================
+    // =========================================================================
+    // GEM
+    // =========================================================================
     private TransformGroup buildGem() {
-        Shape3D gemShape = new Shape3D(buildOctahedronGeo(GEM_SIZE), gemMaterial());
+        Shape3D gem = new Shape3D(octahedron(GEM_SIZE), gemMat());
+
         TransformGroup spinTG = new TransformGroup();
         spinTG.setCapability(TransformGroup.ALLOW_TRANSFORM_WRITE);
-        Alpha rotAlpha = new Alpha(-1, 8000);
-        RotationInterpolator rotator = new RotationInterpolator(
-            rotAlpha, spinTG, new Transform3D(), 0f, (float)(2 * Math.PI));
-        rotator.setSchedulingBounds(worldBounds());
-        spinTG.addChild(gemShape);
-        spinTG.addChild(rotator);
-        PointLight glow = new PointLight(YELLOW_LIGHT,
-            new Point3f(0, 0, 0), new Point3f(0.05f, 0.1f, 0.0f));
-        glow.setInfluencingBounds(worldBounds());
+        RotationInterpolator rot = new RotationInterpolator(
+                new Alpha(-1, 8000), spinTG, new Transform3D(), 0f, (float) (2 * Math.PI));
+        rot.setSchedulingBounds(wb());
+        spinTG.addChild(gem);
+        spinTG.addChild(rot);
+
+        PointLight glow = new PointLight(YELLOW, new Point3f(0, 0, 0), new Point3f(0.05f, 0.1f, 0f));
+        glow.setInfluencingBounds(wb());
         spinTG.addChild(glow);
-        Transform3D pos = new Transform3D();
-        pos.setTranslation(new Vector3f(0f, GEM_Y, 0f));
-        Transform3D stretch = new Transform3D();
-        stretch.setScale(new Vector3d(1.0, GEM_SCALE_Y, 1.0));
-        pos.mul(stretch);
-        TransformGroup posTG = new TransformGroup(pos);
+
+        Transform3D t = new Transform3D();
+        t.setTranslation(new Vector3f(0, GEM_Y, 0));
+        Transform3D s = new Transform3D();
+        s.setScale(new Vector3d(1, GEM_SCALE_Y, 1));
+        t.mul(s);
+        TransformGroup posTG = new TransformGroup(t);
         posTG.addChild(spinTG);
         return posTG;
     }
 
-    private GeometryArray buildOctahedronGeo(float s) {
-        float[][] verts = {
-            {s,0,0},{0,s,0},{0,0,s},   {0,0,s},{0,s,0},{-s,0,0},
-            {-s,0,0},{0,s,0},{0,0,-s}, {0,0,-s},{0,s,0},{s,0,0},
-            {s,0,0},{0,0,s},{0,-s,0},  {0,0,s},{-s,0,0},{0,-s,0},
-            {-s,0,0},{0,0,-s},{0,-s,0},{0,0,-s},{s,0,0},{0,-s,0},
-        };
-        TriangleArray geo = new TriangleArray(verts.length,
-            GeometryArray.COORDINATES | GeometryArray.NORMALS);
-        float[] coords  = new float[verts.length * 3];
-        float[] normals = new float[verts.length * 3];
-        for (int i = 0; i < verts.length; i += 3) {
-            Vector3f a = v(verts[i]), b = v(verts[i+1]), c = v(verts[i+2]);
-            Vector3f ab = new Vector3f(); ab.sub(b, a);
-            Vector3f ac = new Vector3f(); ac.sub(c, a);
-            Vector3f n  = new Vector3f(); n.cross(ab, ac); n.normalize();
-            for (int j = 0; j < 3; j++) {
-                int idx = (i + j) * 3;
-                coords[idx]=verts[i+j][0]; coords[idx+1]=verts[i+j][1]; coords[idx+2]=verts[i+j][2];
-                normals[idx]=n.x; normals[idx+1]=n.y; normals[idx+2]=n.z;
-            }
+
+
+    // =========================================================================
+    // GAMEPLAY OBJECTS: keys, door, lights, and first-person movement
+    // =========================================================================
+    private TransformGroup buildKeys() {
+        TransformGroup group = new TransformGroup();
+        Appearance keyApp = matEmissive(c(0.45f, 0.30f, 0.04f), c(1.0f, 0.78f, 0.18f), c(0.45f, 0.28f, 0.02f));
+
+        for (int i = 0; i < KEY_POSITIONS.length; i++) {
+            Shape3D keyShape = new Shape3D(octahedron(0.22f), keyApp);
+            TransformGroup spinTG = new TransformGroup();
+            spinTG.setCapability(TransformGroup.ALLOW_TRANSFORM_WRITE);
+            RotationInterpolator spin = new RotationInterpolator(new Alpha(-1, 2200), spinTG,
+                    new Transform3D(), 0f, (float) (2 * Math.PI));
+            spin.setSchedulingBounds(wb());
+            spinTG.addChild(keyShape);
+            spinTG.addChild(spin);
+
+            Transform3D pos = new Transform3D();
+            pos.setTranslation(new Vector3f(KEY_POSITIONS[i].x, KEY_POSITIONS[i].y, KEY_POSITIONS[i].z));
+            keyTGs[i] = new TransformGroup(pos);
+            keyTGs[i].setCapability(TransformGroup.ALLOW_TRANSFORM_WRITE);
+            keyTGs[i].addChild(spinTG);
+            group.addChild(keyTGs[i]);
         }
-        geo.setCoordinates(0, coords);
-        geo.setNormals(0, normals);
-        return geo;
+        return group;
     }
 
-    private Vector3f v(float[] a) { return new Vector3f(a[0], a[1], a[2]); }
+    private TransformGroup buildExitDoor() {
+        TransformGroup group = new TransformGroup();
 
-    // =======================================================================
-    // DOOR -- frame + Switch-controlled panel + three lanterns
-    // =======================================================================
-    private TransformGroup buildDoor() {
-        TransformGroup tg = new TransformGroup();
+        Appearance doorApp = matEmissive(c(0.18f, 0.10f, 0.05f), c(0.36f, 0.20f, 0.10f), c(0.04f, 0.02f, 0.01f));
+        Appearance frameApp = matEmissive(c(0.20f, 0.16f, 0.14f), c(0.48f, 0.40f, 0.34f), c(0.08f, 0.06f, 0.05f));
 
-        Appearance frameApp = stoneMaterial(
-            new Color3f(0.18f, 0.14f, 0.10f),
-            new Color3f(0.40f, 0.32f, 0.22f));
+        // Door is placed at the far end of the north hallway.
+        doorTG = new TransformGroup();
+        doorTG.setCapability(TransformGroup.ALLOW_TRANSFORM_WRITE);
+        Transform3D doorPos = new Transform3D();
+        doorPos.setTranslation(new Vector3f(0f, FLOOR_Y + 1.65f, HALL_END_Z + 0.06f));
+        doorTG.setTransform(doorPos);
+        doorTG.addChild(new com.sun.j3d.utils.geometry.Box(ARCH_W / 2f - 0.25f, 1.65f, 0.08f,
+                com.sun.j3d.utils.geometry.Primitive.GENERATE_NORMALS, doorApp));
+        group.addChild(doorTG);
 
-        tg.addChild(box(0.15f, DOOR_HEIGHT + 0.3f, 0.25f,
-            -DOOR_WIDTH/2f - 0.075f,
-            -ROOM_HEIGHT/2f + (DOOR_HEIGHT + 0.3f)/2f, DOOR_Z, frameApp));
-        tg.addChild(box(0.15f, DOOR_HEIGHT + 0.3f, 0.25f,
-             DOOR_WIDTH/2f + 0.075f,
-            -ROOM_HEIGHT/2f + (DOOR_HEIGHT + 0.3f)/2f, DOOR_Z, frameApp));
-        tg.addChild(box(DOOR_WIDTH + 0.4f, 0.25f, 0.25f,
-            0f, -ROOM_HEIGHT/2f + DOOR_HEIGHT + 0.25f/2f, DOOR_Z, frameApp));
+        // Small stone header around the door.
+        group.addChild(translated(0, FLOOR_Y + 3.45f, HALL_END_Z + 0.02f,
+                new com.sun.j3d.utils.geometry.Box(ARCH_W / 2f, 0.16f, 0.16f,
+                        com.sun.j3d.utils.geometry.Primitive.GENERATE_NORMALS, frameApp)));
 
-        // FIX 3: use a Switch node instead of TransparencyAttributes.setValue().
-        // CHILD_ALL = child 0 is rendered (door closed).
-        // CHILD_NONE = nothing rendered (door open).
-        doorSwitch = new Switch(Switch.CHILD_ALL);
-        doorSwitch.setCapability(Switch.ALLOW_SWITCH_WRITE);
-
-        Appearance doorApp = new Appearance();
-        Material doorMat = new Material(
-            new Color3f(0.10f, 0.07f, 0.04f),
-            new Color3f(0f, 0f, 0f),
-            new Color3f(0.25f, 0.18f, 0.10f),
-            new Color3f(0.15f, 0.12f, 0.08f), 18f);
-        doorMat.setLightingEnable(true);
-        doorApp.setMaterial(doorMat);
-        doorSwitch.addChild(
-            box(DOOR_WIDTH, DOOR_HEIGHT, 0.08f, 0f, DOOR_PANEL_Y, DOOR_Z, doorApp));
-        tg.addChild(doorSwitch);
-
-        // Three lanterns
-        float[] lanternX = { -0.7f, 0f, 0.7f };
+        Appearance lightOff = lightAppearance(false);
+        float[] xs = { -0.9f, 0f, 0.9f };
         for (int i = 0; i < 3; i++) {
-            float lx = lanternX[i];
-            float ly = -ROOM_HEIGHT/2f + DOOR_HEIGHT + 0.55f;
+            doorLightShapes[i] = new Shape3D(octahedron(0.16f), lightOff);
+            doorLightShapes[i].setCapability(Shape3D.ALLOW_APPEARANCE_WRITE);
+            TransformGroup lightTG = translated(xs[i], FLOOR_Y + 3.78f, HALL_END_Z + 0.22f, doorLightShapes[i]);
+            group.addChild(lightTG);
 
-            Material lm = new Material(LANTERN_OFF, new Color3f(0f,0f,0f),
-                LANTERN_OFF, new Color3f(0.1f,0.08f,0.05f), 10f);
-            lm.setLightingEnable(true);
-            lm.setCapability(Material.ALLOW_COMPONENT_WRITE);
-            lanternMats[i] = lm;
-
-            Appearance lApp = new Appearance();
-            lApp.setMaterial(lm);
-            Sphere lanternSphere = new Sphere(0.10f, Sphere.GENERATE_NORMALS, 12, lApp);
-            TransformGroup lTG = new TransformGroup();
-            Transform3D lt = new Transform3D();
-            lt.setTranslation(new Vector3f(lx, ly, DOOR_Z - 0.05f));
-            lTG.setTransform(lt);
-            lTG.addChild(lanternSphere);
-            tg.addChild(lTG);
-
-            PointLight pl = new PointLight(LANTERN_ON,
-                new Point3f(lx, ly, DOOR_Z - 0.05f),
-                new Point3f(0.05f, 0.1f, 0.0f));
-            pl.setEnable(false);
-            pl.setCapability(Light.ALLOW_STATE_WRITE);
-            pl.setInfluencingBounds(worldBounds());
-            tg.addChild(pl);
-            lanternLights[i] = pl;
+            doorLightNodes[i] = new PointLight(YELLOW, new Point3f(xs[i], FLOOR_Y + 3.78f, HALL_END_Z + 0.22f),
+                    new Point3f(0.08f, 0.04f, 0.01f));
+            doorLightNodes[i].setCapability(PointLight.ALLOW_STATE_WRITE);
+            doorLightNodes[i].setEnable(false);
+            doorLightNodes[i].setInfluencingBounds(wb());
+            group.addChild(doorLightNodes[i]);
         }
-        return tg;
+        return group;
     }
 
-    // =======================================================================
-    // KEYS
-    // =======================================================================
-    private BranchGroup buildKey(int index) {
-        float[] pos = KEY_POSITIONS[index];
-        Appearance keyApp = keyMaterial();
-
-        TransformGroup keyTG = new TransformGroup();
-        keyTG.setCapability(TransformGroup.ALLOW_TRANSFORM_WRITE);
-        keyTG.setCapability(TransformGroup.ALLOW_CHILDREN_READ);
-        keyTG.setCapability(TransformGroup.ALLOW_CHILDREN_WRITE);
-
-        Shape3D ring = new Shape3D(buildTorusGeo(0.14f, 0.035f, 16, 12), keyApp);
-        ring.setUserData("key_" + index);
-        ring.setCapability(Shape3D.ALLOW_GEOMETRY_READ);
-        TransformGroup ringTG = translated(0f, 0.18f, 0f);
-        ringTG.addChild(ring);
-        keyTG.addChild(ringTG);
-
-        Shape3D shaft = new Shape3D(buildShaftGeo(0.025f, 0.35f, 8), keyApp);
-        shaft.setUserData("key_" + index);
-        keyTG.addChild(shaft);
-
-        Shape3D tooth1 = new Shape3D(buildBoxGeo(0.06f, 0.06f, 0.025f), keyApp);
-        tooth1.setUserData("key_" + index);
-        TransformGroup toothTG1 = translated(0.07f, -0.12f, 0f);
-        toothTG1.addChild(tooth1);
-        keyTG.addChild(toothTG1);
-
-        Shape3D tooth2 = new Shape3D(buildBoxGeo(0.06f, 0.06f, 0.025f), keyApp);
-        tooth2.setUserData("key_" + index);
-        TransformGroup toothTG2 = translated(0.07f, -0.04f, 0f);
-        toothTG2.addChild(tooth2);
-        keyTG.addChild(toothTG2);
-
-        Alpha spinAlpha = new Alpha(-1, 5000 + index * 700);
-        RotationInterpolator spin = new RotationInterpolator(
-            spinAlpha, keyTG, new Transform3D(), 0f, (float)(2 * Math.PI));
-        spin.setSchedulingBounds(worldBounds());
-        keyTG.addChild(spin);
-
-        PointLight kl = new PointLight(
-            new Color3f(1.0f, 0.85f, 0.1f),
-            new Point3f(pos[0], pos[1], pos[2]),
-            new Point3f(0.1f, 0.2f, 0.0f));
-        kl.setInfluencingBounds(worldBounds());
-
-        Transform3D t = new Transform3D();
-        t.setTranslation(new Vector3f(pos[0], pos[1], pos[2]));
-        TransformGroup outerTG = new TransformGroup(t);
-        outerTG.setCapability(TransformGroup.ALLOW_CHILDREN_READ);
-        outerTG.setCapability(TransformGroup.ALLOW_CHILDREN_WRITE);
-        outerTG.addChild(keyTG);
-        outerTG.addChild(kl);
-
-        // FIX 2: ALLOW_DETACH belongs on BranchGroup, not TransformGroup.
-        BranchGroup bg = new BranchGroup();
-        bg.setCapability(BranchGroup.ALLOW_DETACH);
-        bg.setCapability(BranchGroup.ALLOW_CHILDREN_READ);
-        bg.addChild(outerTG);
-
-        keyBGs[index] = bg;
-        return bg;
-    }
-
-    // =======================================================================
-    // PICKING
-    // =======================================================================
-    private void handlePick(MouseEvent e) {
-        pickCanvas.setShapeLocation(e);
-        PickResult result = pickCanvas.pickClosest();
-        if (result == null) return;
-        Node node = result.getObject();
-        while (node != null) {
-            if (node instanceof Shape3D) {
-                Object ud = ((Shape3D) node).getUserData();
-                if (ud instanceof String && ((String) ud).startsWith("key_")) {
-                    collectKey(Integer.parseInt(((String) ud).substring(4)));
-                    return;
-                }
-            }
-            try { node = node.getParent(); }
-            catch (Exception ex) { break; }
+    private Appearance lightAppearance(boolean on) {
+        if (on) {
+            return matEmissive(c(1.0f, 0.75f, 0.10f), c(1.0f, 0.85f, 0.20f), c(1.0f, 0.60f, 0.04f));
         }
+        return matEmissive(c(0.08f, 0.07f, 0.05f), c(0.18f, 0.16f, 0.12f), c(0.02f, 0.018f, 0.012f));
     }
 
     private void collectKey(int index) {
-        if (keyCollected[index]) return;
-        keyCollected[index] = true;
-        keysFound++;
+        if (keyTaken[index]) return;
+        keyTaken[index] = true;
+        collectedKeys++;
 
-        keyBGs[index].detach();
+        Transform3D hide = new Transform3D();
+        hide.setScale(0.001);
+        hide.setTranslation(new Vector3f(KEY_POSITIONS[index].x, -100f, KEY_POSITIONS[index].z));
+        keyTGs[index].setTransform(hide);
 
-        lanternLights[index].setEnable(true);
-        lanternMats[index].setAmbientColor(LANTERN_ON);
-        lanternMats[index].setDiffuseColor(LANTERN_ON);
-        lanternMats[index].setEmissiveColor(new Color3f(0.8f, 0.6f, 0.05f));
+        int lightIndex = collectedKeys - 1;
+        doorLightShapes[lightIndex].setAppearance(lightAppearance(true));
+        doorLightNodes[lightIndex].setEnable(true);
 
-        if (keysFound < 3) {
-            statusLabel.setText("  Key " + keysFound +
-                " of 3 found -- keep searching...   Keys: " + keysFound + " / 3");
-        } else {
-            statusLabel.setText("  All three keys found!  The door is open.");
-            // FIX 3: flip Switch to hide the door panel immediately
-            doorSwitch.setWhichChild(Switch.CHILD_NONE);
+        if (collectedKeys == 3) {
+            openDoor();
         }
     }
 
-    // =======================================================================
-    // FIRST-PERSON CONTROLS
-    //   WASD = move
-    //   Mouse drag = look around
-    //   Space = move up
-    //   Shift = move down
-    //
-    // This Behavior updates the camera every frame and clamps it inside the
-    // cylindrical room, so the player cannot walk through the wall/floor/ceiling.
-    // =======================================================================
-    private static class FirstPersonControls extends Behavior
-            implements KeyListener, MouseMotionListener, MouseListener {
+    private void openDoor() {
+        Transform3D opened = new Transform3D();
+        // Slides upward so the doorway visibly opens.
+        opened.setTranslation(new Vector3f(0f, FLOOR_Y + 4.35f, HALL_END_Z + 0.06f));
+        doorTG.setTransform(opened);
+    }
 
-        private final Canvas3D canvas;
-        private final TransformGroup vpTG;
-        private final Vector3f position;
-        private final float maxRadius;
-        private final float minY;
-        private final float maxY;
-
-        private final WakeupOnElapsedFrames wakeup =
-            new WakeupOnElapsedFrames(0, true);
-
-        private boolean forward, backward, left, right, up, down;
-        private int lastMouseX;
-        private int lastMouseY;
-        private boolean dragging = false;
-
-        // Camera rotation.
-        // yaw = left/right turn. pitch = up/down look.
-        private float yaw = 0.0f;
-        private float pitch = -0.10f;
-
-        // Tweak these to change feel.
-        private static final float MOVE_SPEED = 0.16f;
-        private static final float LOOK_SPEED = 0.006f;
-        private static final float PITCH_LIMIT = 1.35f;
-
-        FirstPersonControls(Canvas3D canvas,
-                            TransformGroup vpTG,
-                            Vector3f startPosition,
-                            float maxRadius,
-                            float minY,
-                            float maxY) {
-            this.canvas = canvas;
-            this.vpTG = vpTG;
-            this.position = new Vector3f(startPosition);
-            this.maxRadius = maxRadius;
-            this.minY = minY;
-            this.maxY = maxY;
-
-            canvas.addKeyListener(this);
-            canvas.addMouseMotionListener(this);
-            canvas.addMouseListener(this);
+    private boolean isWalkable(float x, float z) {
+        if ((x * x + z * z) <= (ROOM_R - PLAYER_RADIUS) * (ROOM_R - PLAYER_RADIUS)) {
+            return true;
         }
 
-        @Override
+        float hw = ARCH_W / 2f - PLAYER_RADIUS;
+        if (Math.abs(x) <= hw && z <= NORTH_Z + 0.25f && z >= HALL_END_Z + PLAYER_RADIUS) return true;
+        if (Math.abs(x) <= hw && z >= SOUTH_Z - 0.25f && z <= SOUTH_END_Z - PLAYER_RADIUS) return true;
+
+        return inRotatedNorthHall(x, z, SE_ANGLE) || inRotatedNorthHall(x, z, SW_ANGLE);
+    }
+
+    private boolean inRotatedNorthHall(float x, float z, double wallAngle) {
+        double rotY = wallAngle - (3.0 * Math.PI / 2.0);
+        double inv = -rotY;
+        float lx = (float) (Math.cos(inv) * x + Math.sin(inv) * z);
+        float lz = (float) (-Math.sin(inv) * x + Math.cos(inv) * z);
+        float hw = ARCH_W / 2f - PLAYER_RADIUS;
+        return Math.abs(lx) <= hw && lz <= NORTH_Z + 0.25f && lz >= HALL_END_Z + PLAYER_RADIUS;
+    }
+
+    private class FirstPersonController extends Behavior implements KeyListener, MouseMotionListener {
+        private final TransformGroup viewTG;
+        private final Canvas3D canvas;
+        private final WakeupOnElapsedFrames wakeup = new WakeupOnElapsedFrames(0);
+        private final boolean[] keys = new boolean[256];
+        private float x = 0f, z = 10f, yaw = 0f, pitch = 0f;
+        private int lastMouseX = -1;
+        private int lastMouseY = -1;
+
+        FirstPersonController(TransformGroup viewTG, Canvas3D canvas) {
+            this.viewTG = viewTG;
+            this.canvas = canvas;
+        }
+
         public void initialize() {
-            applyCameraTransform();
             wakeupOn(wakeup);
         }
 
-        @Override
-        @SuppressWarnings("rawtypes")
-        public void processStimulus(Enumeration criteria) {
+        public void processStimulus(java.util.Enumeration criteria) {
             updateMovement();
-            applyCameraTransform();
+            checkKeyPickups();
             wakeupOn(wakeup);
         }
 
         private void updateMovement() {
-            float dx = 0f;
-            float dy = 0f;
-            float dz = 0f;
+            float forward = 0f, strafe = 0f;
+            if (down(KeyEvent.VK_W)) forward += 1f;
+            if (down(KeyEvent.VK_S)) forward -= 1f;
+            if (down(KeyEvent.VK_A)) strafe -= 1f;
+            if (down(KeyEvent.VK_D)) strafe += 1f;
+            if (down(KeyEvent.VK_LEFT)) yaw += 0.045f;
+            if (down(KeyEvent.VK_RIGHT)) yaw -= 0.045f;
+            if (down(KeyEvent.VK_UP)) pitch += 0.035f;
+            if (down(KeyEvent.VK_DOWN)) pitch -= 0.035f;
+            clampPitch();
 
-            // Forward direction for Java3D camera looking down local -Z.
-            float forwardX = -(float) Math.sin(yaw);
-            float forwardZ = -(float) Math.cos(yaw);
+            if (forward != 0f || strafe != 0f) {
+                float len = (float) Math.sqrt(forward * forward + strafe * strafe);
+                forward /= len;
+                strafe /= len;
 
-            // Right/left strafe direction.
-            float rightX = (float) Math.cos(yaw);
-            float rightZ = -(float) Math.sin(yaw);
+                float sin = (float) Math.sin(yaw);
+                float cos = (float) Math.cos(yaw);
+                float dx = (-sin * forward + cos * strafe) * WALK_SPEED;
+                float dz = (-cos * forward - sin * strafe) * WALK_SPEED;
 
-            if (forward) {
-                dx += forwardX * MOVE_SPEED;
-                dz += forwardZ * MOVE_SPEED;
-            }
-            if (backward) {
-                dx -= forwardX * MOVE_SPEED;
-                dz -= forwardZ * MOVE_SPEED;
-            }
-            if (right) {
-                dx += rightX * MOVE_SPEED;
-                dz += rightZ * MOVE_SPEED;
-            }
-            if (left) {
-                dx -= rightX * MOVE_SPEED;
-                dz -= rightZ * MOVE_SPEED;
-            }
-            if (up) {
-                dy += MOVE_SPEED;
-            }
-            if (down) {
-                dy -= MOVE_SPEED;
+                tryMove(dx, dz);
             }
 
-            // Normalize diagonal movement so W+D is not faster than W alone.
-            float horizontalLength = (float) Math.sqrt(dx * dx + dz * dz);
-            if (horizontalLength > MOVE_SPEED) {
-                float scale = MOVE_SPEED / horizontalLength;
-                dx *= scale;
-                dz *= scale;
-            }
-
-            position.x += dx;
-            position.y += dy;
-            position.z += dz;
-
-            clampPosition();
-        }
-
-        private void clampPosition() {
-            if (position.y < minY) position.y = minY;
-            if (position.y > maxY) position.y = maxY;
-
-            float r = (float) Math.sqrt(position.x * position.x + position.z * position.z);
-            if (r > maxRadius && r > 0.001f) {
-                float scale = maxRadius / r;
-                position.x *= scale;
-                position.z *= scale;
-            }
-        }
-
-        private void applyCameraTransform() {
             Transform3D yawT = new Transform3D();
             yawT.rotY(yaw);
 
@@ -720,308 +979,233 @@ public class RoundtableHold extends JFrame {
             pitchT.rotX(pitch);
 
             yawT.mul(pitchT);
-            yawT.setTranslation(position);
-
-            vpTG.setTransform(yawT);
+            yawT.setTranslation(new Vector3f(x, PLAYER_EYE_Y, z));
+            viewTG.setTransform(yawT);
         }
 
-        private void setKey(int keyCode, boolean pressed) {
-            switch (keyCode) {
-                case KeyEvent.VK_W:
-                case KeyEvent.VK_UP:
-                    forward = pressed;
-                    break;
-                case KeyEvent.VK_S:
-                case KeyEvent.VK_DOWN:
-                    backward = pressed;
-                    break;
-                case KeyEvent.VK_A:
-                case KeyEvent.VK_LEFT:
-                    left = pressed;
-                    break;
-                case KeyEvent.VK_D:
-                case KeyEvent.VK_RIGHT:
-                    right = pressed;
-                    break;
-                case KeyEvent.VK_SPACE:
-                    up = pressed;
-                    break;
-                case KeyEvent.VK_SHIFT:
-                    down = pressed;
-                    break;
-                default:
-                    break;
+        private void tryMove(float dx, float dz) {
+            // Axis-separated movement gives a smooth slide along walls.
+            if (isWalkable(x + dx, z)) x += dx;
+            if (isWalkable(x, z + dz)) z += dz;
+        }
+
+        private void clampPitch() {
+            float limit = (float) Math.toRadians(80);
+            if (pitch > limit) pitch = limit;
+            if (pitch < -limit) pitch = -limit;
+        }
+
+        private void checkKeyPickups() {
+            for (int i = 0; i < KEY_POSITIONS.length; i++) {
+                if (keyTaken[i]) continue;
+                float dx = x - KEY_POSITIONS[i].x;
+                float dz = z - KEY_POSITIONS[i].z;
+                if (dx * dx + dz * dz < 0.85f * 0.85f) {
+                    collectKey(i);
+                }
             }
         }
 
-        @Override
+        private boolean down(int code) {
+            return code >= 0 && code < keys.length && keys[code];
+        }
+
         public void keyPressed(KeyEvent e) {
-            setKey(e.getKeyCode(), true);
+            if (e.getKeyCode() < keys.length) keys[e.getKeyCode()] = true;
         }
 
-        @Override
         public void keyReleased(KeyEvent e) {
-            setKey(e.getKeyCode(), false);
+            if (e.getKeyCode() < keys.length) keys[e.getKeyCode()] = false;
         }
 
-        @Override
-        public void keyTyped(KeyEvent e) {
-            // Not needed.
-        }
+        public void keyTyped(KeyEvent e) { }
 
-        @Override
-        public void mousePressed(MouseEvent e) {
-            canvas.requestFocusInWindow();
-            dragging = true;
-            lastMouseX = e.getX();
-            lastMouseY = e.getY();
-        }
-
-        @Override
-        public void mouseReleased(MouseEvent e) {
-            dragging = false;
-        }
-
-        @Override
         public void mouseDragged(MouseEvent e) {
-            if (!dragging) return;
+            mouseMoved(e);
+        }
 
-            int dx = e.getX() - lastMouseX;
-            int dy = e.getY() - lastMouseY;
-
-            yaw -= dx * LOOK_SPEED;
-            pitch -= dy * LOOK_SPEED;
-
-            if (pitch > PITCH_LIMIT) pitch = PITCH_LIMIT;
-            if (pitch < -PITCH_LIMIT) pitch = -PITCH_LIMIT;
-
+        public void mouseMoved(MouseEvent e) {
+            if (!canvas.hasFocus()) canvas.requestFocusInWindow();
+            if (lastMouseX >= 0 && lastMouseY >= 0) {
+                int dx = e.getX() - lastMouseX;
+                int dy = e.getY() - lastMouseY;
+                yaw -= dx * MOUSE_SENS;
+                pitch -= dy * MOUSE_SENS;
+                clampPitch();
+            }
             lastMouseX = e.getX();
             lastMouseY = e.getY();
         }
-
-        @Override
-        public void mouseMoved(MouseEvent e) {
-            // Not needed.
-        }
-
-        @Override
-        public void mouseClicked(MouseEvent e) {
-            canvas.requestFocusInWindow();
-        }
-
-        @Override
-        public void mouseEntered(MouseEvent e) {
-            canvas.requestFocusInWindow();
-        }
-
-        @Override
-        public void mouseExited(MouseEvent e) {
-            // Not needed.
-        }
     }
 
-    // =======================================================================
-    // GEOMETRY BUILDERS
-    // =======================================================================
+    // =========================================================================
+    // GEOMETRY UTILITIES
+    // =========================================================================
 
-    private GeometryArray buildTorusGeo(float R, float r, int majorSeg, int minorSeg) {
-        int triCount = majorSeg * minorSeg * 2;
-        TriangleArray geo = new TriangleArray(triCount * 3,
-            GeometryArray.COORDINATES | GeometryArray.NORMALS);
-        float[] coords = new float[triCount * 3 * 3];
-        float[] norms  = new float[triCount * 3 * 3];
-        int idx = 0;
-        for (int i = 0; i < majorSeg; i++) {
-            double a0 = 2.0 * Math.PI * i / majorSeg;
-            double a1 = 2.0 * Math.PI * (i + 1) / majorSeg;
-            for (int j = 0; j < minorSeg; j++) {
-                double b0 = 2.0 * Math.PI * j / minorSeg;
-                double b1 = 2.0 * Math.PI * (j + 1) / minorSeg;
-                float[][] pts = new float[4][3];
-                float[][] ns  = new float[4][3];
-                double[][] ab = { {a0,b0},{a1,b0},{a1,b1},{a0,b1} };
-                for (int k = 0; k < 4; k++) {
-                    double ca=Math.cos(ab[k][0]), sa=Math.sin(ab[k][0]);
-                    double cb=Math.cos(ab[k][1]), sb=Math.sin(ab[k][1]);
-                    pts[k][0]=(float)((R+r*cb)*ca);
-                    pts[k][1]=(float)(r*sb);
-                    pts[k][2]=(float)((R+r*cb)*sa);
-                    ns[k][0]=(float)(cb*ca); ns[k][1]=(float)(sb); ns[k][2]=(float)(cb*sa);
-                }
-                int[][] tris = { {0,1,2},{0,2,3} };
-                for (int[] tri : tris) {
-                    for (int k : tri) {
-                        coords[idx]=pts[k][0]; coords[idx+1]=pts[k][1]; coords[idx+2]=pts[k][2];
-                        norms[idx]=ns[k][0];   norms[idx+1]=ns[k][1];   norms[idx+2]=ns[k][2];
-                        idx += 3;
-                    }
-                }
-            }
+    /** Add 3 vertices + normals for one triangle. */
+    private void addTriN(ArrayList<float[]> vv, ArrayList<float[]> nn,
+            float nx, float ny, float nz,
+            float[] a, float[] b, float[] c) {
+        float[] n = { nx, ny, nz };
+        vv.add(a);
+        vv.add(b);
+        vv.add(c);
+        nn.add(n);
+        nn.add(n);
+        nn.add(n);
+    }
+
+    /** Add two triangles forming a quad (vertices: BL, BR, TR, TL). */
+    private void addQuadN(ArrayList<float[]> vv, ArrayList<float[]> nn,
+            float nx, float ny, float nz,
+            float[] bl, float[] br, float[] tr, float[] tl) {
+        addTriN(vv, nn, nx, ny, nz, bl, br, tr);
+        addTriN(vv, nn, nx, ny, nz, bl, tr, tl);
+    }
+
+    private GeometryArray listToGeo(ArrayList<float[]> vv, ArrayList<float[]> nn) {
+        int cnt = vv.size();
+        TriangleArray geo = new TriangleArray(cnt, GeometryArray.COORDINATES | GeometryArray.NORMALS);
+        float[] vc = new float[cnt * 3], nc = new float[cnt * 3];
+        for (int i = 0; i < cnt; i++) {
+            float[] v = vv.get(i), n = nn.get(i);
+            vc[i * 3] = v[0];
+            vc[i * 3 + 1] = v[1];
+            vc[i * 3 + 2] = v[2];
+            nc[i * 3] = n[0];
+            nc[i * 3 + 1] = n[1];
+            nc[i * 3 + 2] = n[2];
         }
-        geo.setCoordinates(0, coords);
-        geo.setNormals(0, norms);
+        geo.setCoordinates(0, vc);
+        geo.setNormals(0, nc);
         return geo;
     }
 
-    private GeometryArray buildShaftGeo(float radius, float height, int seg) {
-        int triCount = seg * 2;
-        TriangleArray geo = new TriangleArray(triCount * 3,
-            GeometryArray.COORDINATES | GeometryArray.NORMALS);
-        float half = height / 2f;
-        float[] coords = new float[triCount * 3 * 3];
-        float[] norms  = new float[triCount * 3 * 3];
-        int idx = 0;
-        for (int i = 0; i < seg; i++) {
-            double a0 = 2.0 * Math.PI * i / seg;
-            double a1 = 2.0 * Math.PI * (i + 1) / seg;
-            float x0=(float)(radius*Math.cos(a0)), z0=(float)(radius*Math.sin(a0));
-            float x1=(float)(radius*Math.cos(a1)), z1=(float)(radius*Math.sin(a1));
-            float nx=(float)(Math.cos((a0+a1)/2)), nz=(float)(Math.sin((a0+a1)/2));
-            float[][] tri1 = { {x0,-half,z0},{x1,-half,z1},{x1,half,z1} };
-            float[][] tri2 = { {x0,-half,z0},{x1,half,z1},{x0,half,z0} };
-            for (float[][] tri : new float[][][]{tri1,tri2}) {
-                for (float[] vv : tri) {
-                    coords[idx]=vv[0]; coords[idx+1]=vv[1]; coords[idx+2]=vv[2];
-                    norms[idx]=nx;     norms[idx+1]=0f;     norms[idx+2]=nz;
-                    idx += 3;
-                }
-            }
-        }
-        geo.setCoordinates(0, coords);
-        geo.setNormals(0, norms);
-        return geo;
+    /** Inline quad geometry (BL, BR, TR, TL + normal). */
+    private GeometryArray quadGeo(float[] bl, float[] br, float[] tr, float[] tl, float[] n) {
+        ArrayList<float[]> vv = new ArrayList<>(), nn = new ArrayList<>();
+        addQuadN(vv, nn, n[0], n[1], n[2], bl, br, tr, tl);
+        return listToGeo(vv, nn);
     }
 
-    private GeometryArray buildBoxGeo(float w, float h, float d) {
-        float hw=w/2, hh=h/2, hd=d/2;
+    /** Flat disc at (0,y,0). normalY=+1→up, -1→down. */
+    private TransformGroup placedDisc(float r, int seg, float normalY, float y, Appearance app) {
+        int vCount = seg + 2;
+        TriangleFanArray geo = new TriangleFanArray(vCount,
+                GeometryArray.COORDINATES | GeometryArray.NORMALS, new int[] { vCount });
+        float[] co = new float[vCount * 3], no = new float[vCount * 3];
+        co[0] = 0;
+        co[1] = 0;
+        co[2] = 0;
+        no[1] = normalY;
+        for (int i = 0; i <= seg; i++) {
+            double a = normalY > 0 ? 2 * Math.PI * i / seg : -2 * Math.PI * i / seg;
+            int b = (i + 1) * 3;
+            co[b] = (float) (r * Math.cos(a));
+            co[b + 2] = (float) (r * Math.sin(a));
+            no[b + 1] = normalY;
+        }
+        geo.setCoordinates(0, co);
+        geo.setNormals(0, no);
+        Transform3D t = new Transform3D();
+        t.setTranslation(new Vector3f(0, y, 0));
+        TransformGroup tg = new TransformGroup(t);
+        tg.addChild(new Shape3D(geo, app));
+        return tg;
+    }
+
+    private GeometryArray octahedron(float s) {
         float[][] verts = {
-            {-hw,-hh, hd},{ hw,-hh, hd},{ hw, hh, hd},{-hw,-hh, hd},{ hw, hh, hd},{-hw, hh, hd},
-            { hw,-hh,-hd},{-hw,-hh,-hd},{-hw, hh,-hd},{ hw,-hh,-hd},{-hw, hh,-hd},{ hw, hh,-hd},
-            {-hw, hh, hd},{ hw, hh, hd},{ hw, hh,-hd},{-hw, hh, hd},{ hw, hh,-hd},{-hw, hh,-hd},
-            {-hw,-hh,-hd},{ hw,-hh,-hd},{ hw,-hh, hd},{-hw,-hh,-hd},{ hw,-hh, hd},{-hw,-hh, hd},
-            { hw,-hh, hd},{ hw,-hh,-hd},{ hw, hh,-hd},{ hw,-hh, hd},{ hw, hh,-hd},{ hw, hh, hd},
-            {-hw,-hh,-hd},{-hw,-hh, hd},{-hw, hh, hd},{-hw,-hh,-hd},{-hw, hh, hd},{-hw, hh,-hd},
-        };
-        float[][] faceN = {
-            {0,0,1},{0,0,1},{0,0,1},{0,0,1},{0,0,1},{0,0,1},
-            {0,0,-1},{0,0,-1},{0,0,-1},{0,0,-1},{0,0,-1},{0,0,-1},
-            {0,1,0},{0,1,0},{0,1,0},{0,1,0},{0,1,0},{0,1,0},
-            {0,-1,0},{0,-1,0},{0,-1,0},{0,-1,0},{0,-1,0},{0,-1,0},
-            {1,0,0},{1,0,0},{1,0,0},{1,0,0},{1,0,0},{1,0,0},
-            {-1,0,0},{-1,0,0},{-1,0,0},{-1,0,0},{-1,0,0},{-1,0,0},
+                { s, 0, 0 }, { 0, s, 0 }, { 0, 0, s }, { 0, 0, s }, { 0, s, 0 }, { -s, 0, 0 },
+                { -s, 0, 0 }, { 0, s, 0 }, { 0, 0, -s }, { 0, 0, -s }, { 0, s, 0 }, { s, 0, 0 },
+                { s, 0, 0 }, { 0, 0, s }, { 0, -s, 0 }, { 0, 0, s }, { -s, 0, 0 }, { 0, -s, 0 },
+                { -s, 0, 0 }, { 0, 0, -s }, { 0, -s, 0 }, { 0, 0, -s }, { s, 0, 0 }, { 0, -s, 0 }
         };
         TriangleArray geo = new TriangleArray(verts.length,
-            GeometryArray.COORDINATES | GeometryArray.NORMALS);
-        float[] coords = new float[verts.length * 3];
-        float[] norms  = new float[verts.length * 3];
-        for (int i = 0; i < verts.length; i++) {
-            coords[i*3]=verts[i][0]; coords[i*3+1]=verts[i][1]; coords[i*3+2]=verts[i][2];
-            norms[i*3]=faceN[i][0];  norms[i*3+1]=faceN[i][1];  norms[i*3+2]=faceN[i][2];
+                GeometryArray.COORDINATES | GeometryArray.NORMALS);
+        float[] co = new float[verts.length * 3], no = new float[verts.length * 3];
+        for (int i = 0; i < verts.length; i += 3) {
+            Vector3f a = vf(verts[i]), ab = new Vector3f(), ac = new Vector3f(), n = new Vector3f();
+            ab.sub(vf(verts[i + 1]), a);
+            ac.sub(vf(verts[i + 2]), a);
+            n.cross(ab, ac);
+            n.normalize();
+            for (int j = 0; j < 3; j++) {
+                int k = (i + j) * 3;
+                co[k] = verts[i + j][0];
+                co[k + 1] = verts[i + j][1];
+                co[k + 2] = verts[i + j][2];
+                no[k] = n.x;
+                no[k + 1] = n.y;
+                no[k + 2] = n.z;
+            }
         }
-        geo.setCoordinates(0, coords);
-        geo.setNormals(0, norms);
+        geo.setCoordinates(0, co);
+        geo.setNormals(0, no);
         return geo;
     }
 
-    // -----------------------------------------------------------------------
-    private TransformGroup translated(float x, float y, float z) {
+    // ── material helpers ──────────────────────────────────────────────────────
+    private Appearance matEmissive(Color3f amb, Color3f diff, Color3f emis) {
+        Appearance app = new Appearance();
+        Material m = new Material();
+        m.setAmbientColor(amb);
+        m.setDiffuseColor(diff);
+        m.setEmissiveColor(emis);
+        m.setSpecularColor(c(0.25f, 0.22f, 0.15f));
+        m.setShininess(18);
+        m.setLightingEnable(true);
+        app.setMaterial(m);
+        PolygonAttributes pa = new PolygonAttributes();
+        pa.setCullFace(PolygonAttributes.CULL_NONE);
+        app.setPolygonAttributes(pa);
+        return app;
+    }
+
+    private Appearance gemMat() {
+        Appearance app = new Appearance();
+        Material m = new Material();
+        m.setEmissiveColor(c(0.9f, 0.7f, 0));
+        m.setAmbientColor(c(1, 0.8f, 0));
+        m.setDiffuseColor(c(1, 0.9f, 0.3f));
+        m.setSpecularColor(c(1, 1, 0.6f));
+        m.setShininess(128);
+        m.setLightingEnable(true);
+        app.setMaterial(m);
+        // Fully opaque — removes all transparency depth-sorting issues.
+        // The strong emissive color makes it look glowing without needing alpha.
+        PolygonAttributes pa = new PolygonAttributes();
+        pa.setCullFace(PolygonAttributes.CULL_NONE);
+        app.setPolygonAttributes(pa);
+        return app;
+    }
+
+    // ── tiny helpers ──────────────────────────────────────────────────────────
+    private Color3f c(float r, float g, float b) {
+        return new Color3f(r, g, b);
+    }
+
+    private float[] p(float x, float y, float z) {
+        return new float[] { x, y, z };
+    }
+
+    private Vector3f vf(float[] a) {
+        return new Vector3f(a[0], a[1], a[2]);
+    }
+
+    private BoundingSphere wb() {
+        return new BoundingSphere(new Point3d(), 60);
+    }
+
+    private TransformGroup translated(float x, float y, float z, Node child) {
         Transform3D t = new Transform3D();
         t.setTranslation(new Vector3f(x, y, z));
-        return new TransformGroup(t);
+        TransformGroup tg = new TransformGroup(t);
+        tg.addChild(child);
+        return tg;
     }
 
-    private Shape3D box(float w, float h, float d,
-                        float x, float y, float z, Appearance app) {
-        float hw=w/2, hh=h/2, hd=d/2;
-        float[][] verts = {
-            {x-hw,y-hh,z+hd},{x+hw,y-hh,z+hd},{x+hw,y+hh,z+hd},{x-hw,y-hh,z+hd},{x+hw,y+hh,z+hd},{x-hw,y+hh,z+hd},
-            {x+hw,y-hh,z-hd},{x-hw,y-hh,z-hd},{x-hw,y+hh,z-hd},{x+hw,y-hh,z-hd},{x-hw,y+hh,z-hd},{x+hw,y+hh,z-hd},
-            {x-hw,y+hh,z+hd},{x+hw,y+hh,z+hd},{x+hw,y+hh,z-hd},{x-hw,y+hh,z+hd},{x+hw,y+hh,z-hd},{x-hw,y+hh,z-hd},
-            {x-hw,y-hh,z-hd},{x+hw,y-hh,z-hd},{x+hw,y-hh,z+hd},{x-hw,y-hh,z-hd},{x+hw,y-hh,z+hd},{x-hw,y-hh,z+hd},
-            {x+hw,y-hh,z+hd},{x+hw,y-hh,z-hd},{x+hw,y+hh,z-hd},{x+hw,y-hh,z+hd},{x+hw,y+hh,z-hd},{x+hw,y+hh,z+hd},
-            {x-hw,y-hh,z-hd},{x-hw,y-hh,z+hd},{x-hw,y+hh,z+hd},{x-hw,y-hh,z-hd},{x-hw,y+hh,z+hd},{x-hw,y+hh,z-hd},
-        };
-        float[][] faceN = {
-            {0,0,1},{0,0,1},{0,0,1},{0,0,1},{0,0,1},{0,0,1},
-            {0,0,-1},{0,0,-1},{0,0,-1},{0,0,-1},{0,0,-1},{0,0,-1},
-            {0,1,0},{0,1,0},{0,1,0},{0,1,0},{0,1,0},{0,1,0},
-            {0,-1,0},{0,-1,0},{0,-1,0},{0,-1,0},{0,-1,0},{0,-1,0},
-            {1,0,0},{1,0,0},{1,0,0},{1,0,0},{1,0,0},{1,0,0},
-            {-1,0,0},{-1,0,0},{-1,0,0},{-1,0,0},{-1,0,0},{-1,0,0},
-        };
-        TriangleArray geo = new TriangleArray(verts.length,
-            GeometryArray.COORDINATES | GeometryArray.NORMALS);
-        float[] coords = new float[verts.length * 3];
-        float[] norms  = new float[verts.length * 3];
-        for (int i = 0; i < verts.length; i++) {
-            coords[i*3]=verts[i][0]; coords[i*3+1]=verts[i][1]; coords[i*3+2]=verts[i][2];
-            norms[i*3]=faceN[i][0];  norms[i*3+1]=faceN[i][1];  norms[i*3+2]=faceN[i][2];
-        }
-        geo.setCoordinates(0, coords);
-        geo.setNormals(0, norms);
-        Shape3D s = new Shape3D(geo, app);
-        s.setCapability(Shape3D.ALLOW_APPEARANCE_READ);
-        return s;
-    }
-
-    // -- Appearance factories (identical to original) -----------------------
-    private Appearance stoneMaterial(Color3f ambient, Color3f diffuse) {
-        return stoneMaterialEmissive(ambient, diffuse, new Color3f(0f, 0f, 0f));
-    }
-
-    private Appearance stoneMaterialEmissive(Color3f ambient, Color3f diffuse,
-                                             Color3f emissive) {
-        Appearance app = new Appearance();
-        Material mat = new Material();
-        mat.setAmbientColor(ambient);
-        mat.setDiffuseColor(diffuse);
-        mat.setEmissiveColor(emissive);
-        mat.setSpecularColor(new Color3f(0.25f, 0.22f, 0.15f));
-        mat.setShininess(18f);
-        mat.setLightingEnable(true);
-        app.setMaterial(mat);
-        PolygonAttributes pa = new PolygonAttributes();
-        pa.setCullFace(PolygonAttributes.CULL_NONE);
-        app.setPolygonAttributes(pa);
-        return app;
-    }
-
-    private Appearance gemMaterial() {
-        Appearance app = new Appearance();
-        Material mat = new Material();
-        mat.setEmissiveColor(new Color3f(0.9f, 0.7f, 0.0f));
-        mat.setAmbientColor(new Color3f(1.0f, 0.8f, 0.0f));
-        mat.setDiffuseColor(new Color3f(1.0f, 0.9f, 0.3f));
-        mat.setSpecularColor(new Color3f(1.0f, 1.0f, 0.6f));
-        mat.setShininess(128f);
-        mat.setLightingEnable(true);
-        app.setMaterial(mat);
-        app.setTransparencyAttributes(
-            new TransparencyAttributes(TransparencyAttributes.BLENDED, 0.25f));
-        PolygonAttributes pa = new PolygonAttributes();
-        pa.setCullFace(PolygonAttributes.CULL_NONE);
-        app.setPolygonAttributes(pa);
-        return app;
-    }
-
-    private Appearance keyMaterial() {
-        Appearance app = new Appearance();
-        Material mat = new Material();
-        mat.setAmbientColor(new Color3f(0.5f, 0.38f, 0.02f));
-        mat.setDiffuseColor(new Color3f(0.85f, 0.65f, 0.08f));
-        mat.setEmissiveColor(new Color3f(0.25f, 0.18f, 0.01f));
-        mat.setSpecularColor(new Color3f(1.0f, 0.92f, 0.5f));
-        mat.setShininess(80f);
-        mat.setLightingEnable(true);
-        app.setMaterial(mat);
-        return app;
-    }
-
-    private BoundingSphere worldBounds() {
-        return new BoundingSphere(new Point3d(0, 0, 0), 60.0);
-    }
-
-    // =======================================================================
+    // =========================================================================
     public static void main(String[] args) {
         SwingUtilities.invokeLater(RoundtableHold::new);
     }
