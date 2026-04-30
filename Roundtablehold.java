@@ -24,12 +24,6 @@ import javax.swing.*;
  *               exit door.  Once all three are found the door panel is
  *               hidden via a Switch node and a message appears.
  *
- * All five original compiler errors have been fixed:
- *   1. setMaxRadius/setMinRotX/setMaxRotX removed -- not on OrbitBehavior 1.5.
- *      The ViewpointRestrictor Behavior handles all camera clamping instead.
- *   2. ALLOW_DETACH moved to BranchGroup (the only node type it belongs to).
- *   3. doorTransparency.setValue() replaced with Switch.setWhichChild().
- *   4. Enumeration parameterized as Enumeration<WakeupCriterion>.
  */
 public class RoundtableHold extends JFrame {
 
