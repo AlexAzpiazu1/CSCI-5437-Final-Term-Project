@@ -716,7 +716,7 @@ public class RoundtableHold extends JFrame {
 
         // Visible 3D flames inside the fireplace.
 // IMPORTANT: z is NEGATIVE because the fireplace is rotated.
-fp.addChild(translated(-0.22f, -0.28f, -0.38f,
+fp.addChild(translated(-0.22f, -0.28f, -0.10f,
         new com.sun.j3d.utils.geometry.Cone(
                 0.22f, 0.85f,
                 com.sun.j3d.utils.geometry.Primitive.GENERATE_NORMALS,
@@ -724,7 +724,7 @@ fp.addChild(translated(-0.22f, -0.28f, -0.38f,
                 fireSolidAppearance(new Color3f(1.0f, 0.18f, 0.02f))
         )));
 
-fp.addChild(translated(0.0f, -0.20f, -0.42f,
+fp.addChild(translated(0.0f, -0.20f, -0.14f,
         new com.sun.j3d.utils.geometry.Cone(
                 0.28f, 1.05f,
                 com.sun.j3d.utils.geometry.Primitive.GENERATE_NORMALS,
@@ -732,7 +732,7 @@ fp.addChild(translated(0.0f, -0.20f, -0.42f,
                 fireSolidAppearance(new Color3f(1.0f, 0.55f, 0.05f))
         )));
 
-fp.addChild(translated(0.22f, -0.32f, -0.36f,
+fp.addChild(translated(0.22f, -0.32f, -0.10f,
         new com.sun.j3d.utils.geometry.Cone(
                 0.18f, 0.75f,
                 com.sun.j3d.utils.geometry.Primitive.GENERATE_NORMALS,
@@ -765,14 +765,45 @@ fireLight.setInfluencingBounds(wb());
 
 group.addChild(fireLight);
 
-        // Softer upper glow so the chimney/fireplace wall is lit too.
-        PointLight upperFireGlow = new PointLight(new Color3f(1.0f, 0.72f, 0.22f),
-                new Point3f(ROOM_R - 1.15f, FLOOR_Y + 1.75f, 0f),
-                new Point3f(0.16f, 0.08f, 0.018f));
-        upperFireGlow.setInfluencingBounds(wb());
-        group.addChild(upperFireGlow);
+        PointLight upperFireGlow = new PointLight(
+        new Color3f(1.0f, 0.72f, 0.22f),
+        new Point3f(ROOM_R - 1.0f, FLOOR_Y + 1.9f, 0f),
+        new Point3f(0.05f, 0.02f, 0.005f)
+);
 
-        FireFlickerBehavior flicker = new FireFlickerBehavior(fireLight);
+upperFireGlow.setCapability(PointLight.ALLOW_COLOR_WRITE);
+upperFireGlow.setCapability(PointLight.ALLOW_ATTENUATION_WRITE);
+upperFireGlow.setInfluencingBounds(wb());
+group.addChild(upperFireGlow);
+
+Appearance glowApp = new Appearance();
+glowApp.setColoringAttributes(new ColoringAttributes(
+        1.0f, 0.45f, 0.05f,
+        ColoringAttributes.SHADE_GOURAUD
+));
+
+glowApp.setTransparencyAttributes(new TransparencyAttributes(
+        TransparencyAttributes.BLENDED,
+        0.65f
+));
+
+PolygonAttributes glowPA = new PolygonAttributes();
+glowPA.setCullFace(PolygonAttributes.CULL_NONE);
+glowApp.setPolygonAttributes(glowPA);
+
+RenderingAttributes glowRA = new RenderingAttributes();
+glowRA.setDepthBufferWriteEnable(false);
+glowApp.setRenderingAttributes(glowRA);
+
+fp.addChild(translated(0f, -0.18f, -0.50f,
+        new com.sun.j3d.utils.geometry.Sphere(
+                0.62f,
+                com.sun.j3d.utils.geometry.Primitive.GENERATE_NORMALS,
+                32,
+                glowApp
+        )));
+
+        FireFlickerBehavior flicker = new FireFlickerBehavior(fireLight, upperFireGlow);
         flicker.setSchedulingBounds(wb());
         group.addChild(flicker);
 
@@ -985,31 +1016,49 @@ group.addChild(fireLight);
     // =========================================================================
     // FIRE FLICKER BEHAVIOR
     // =========================================================================
-    private class FireFlickerBehavior extends Behavior {
-        private final PointLight light;
-        private final WakeupOnElapsedFrames wakeup = new WakeupOnElapsedFrames(0);
+   private class FireFlickerBehavior extends Behavior {
+    private final PointLight mainLight;
+    private final PointLight upperGlow;
+    private final WakeupOnElapsedFrames wakeup = new WakeupOnElapsedFrames(0);
 
-        FireFlickerBehavior(PointLight light) {
-            this.light = light;
-        }
-
-        public void initialize() {
-            wakeupOn(wakeup);
-        }
-
-        public void processStimulus(java.util.Enumeration criteria) {
-            float r = 0.85f + (float) Math.random() * 0.15f;
-            float g = 0.35f + (float) Math.random() * 0.25f;
-            light.setColor(new Color3f(r, g, 0.05f));
-
-            float constant = 0.025f + (float) Math.random() * 0.015f;
-float linear = 0.010f + (float) Math.random() * 0.010f;
-float quadratic = 0.001f + (float) Math.random() * 0.002f;
-            light.setAttenuation(new Point3f(constant, linear, quadratic));
-
-            wakeupOn(wakeup);
-        }
+    FireFlickerBehavior(PointLight mainLight, PointLight upperGlow) {
+        this.mainLight = mainLight;
+        this.upperGlow = upperGlow;
     }
+
+    public void initialize() {
+        wakeupOn(wakeup);
+    }
+
+    public void processStimulus(java.util.Enumeration criteria) {
+        float flicker = 0.85f + (float) Math.random() * 0.25f;
+
+        float r = 0.85f + (float) Math.random() * 0.15f;
+        float g = 0.32f + (float) Math.random() * 0.35f;
+        float b = 0.03f + (float) Math.random() * 0.05f;
+
+        mainLight.setColor(new Color3f(r, g, b));
+        upperGlow.setColor(new Color3f(
+                0.85f * flicker,
+                0.42f * flicker,
+                0.08f * flicker
+        ));
+
+        mainLight.setAttenuation(new Point3f(
+                0.025f + (float) Math.random() * 0.015f,
+                0.010f + (float) Math.random() * 0.010f,
+                0.001f + (float) Math.random() * 0.002f
+        ));
+
+        upperGlow.setAttenuation(new Point3f(
+                0.045f + (float) Math.random() * 0.015f,
+                0.018f + (float) Math.random() * 0.008f,
+                0.004f + (float) Math.random() * 0.002f
+        ));
+
+        wakeupOn(wakeup);
+    }
+}
 
     // =========================================================================
     // FIRST-PERSON CONTROLLER
