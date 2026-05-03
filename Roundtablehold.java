@@ -1,5 +1,8 @@
 import com.sun.j3d.utils.universe.SimpleUniverse;
 import com.sun.j3d.utils.geometry.Cylinder;
+import com.sun.j3d.utils.picking.PickCanvas;
+import com.sun.j3d.utils.picking.PickResult;
+import com.sun.j3d.utils.picking.PickTool;
 
 import javax.media.j3d.*;
 import javax.vecmath.*;
@@ -66,14 +69,45 @@ public class RoundtableHold extends JFrame {
     // ── first-person ──────────────────────────────────────────────────────────
     private static final float PLAYER_RADIUS = 0.38f;
     private static final float PLAYER_EYE_Y = FLOOR_Y + 2.35f;
-    private static final float WALK_SPEED = 0.16f;
-    // ↓ reduced from 0.006 — feels less twitchy
+    private static final float WALK_SPEED = 5.5f; // units per second
+    private static final float TURN_SPEED = 2.8f; // radians per second
     private static final float MOUSE_SENS = 0.0022f;
     // Horizontal FOV in degrees — wider feels less zoomed-in
     private static final double FOV_DEG = 90.0;
 
     private final TransformGroup[] keyTGs = new TransformGroup[3];
     private final boolean[] keyTaken = new boolean[3];
+    private final boolean[] keySpawned = new boolean[3];
+    private final boolean[] puzzleSolved = new boolean[3];
+
+    private static final String PUZZLE1_CORRECT = "PUZZLE1_CORRECT";
+    private static final String PUZZLE1_WRONG = "PUZZLE1_WRONG";
+
+    // The puzzle paper is stored so we can redraw it with a check/x mark when answered.
+    private Shape3D puzzle1PaperShape;
+    // 0-3 = cursor position on the board (cycles with SHIFT when near board)
+    private int puzzle1CursorPos  = 0;
+    // -1 = no wrong guess yet, 0/2/3 = index of last wrong guess (shown with ✗)
+    private int puzzle1LastWrong  = -1;
+    // Board world position — used for proximity check
+    private static final float BOARD_Z = (float)(Math.sqrt(14.0*14.0 - (5.5f/2f)*(5.5f/2f)) - 0.1f - 0.18f);
+    private static final float BOARD_INTERACT_DIST = 5.5f;
+
+    // ── puzzle 2 : stray chair ─────────────────────────────────────────────────
+    // The stray chair sits pulled OUT from the table; all others are tucked under.
+    // Player must look at the stray chair and press E (or click) to push it under.
+    private static final String PUZZLE2_CHAIR = "PUZZLE2_CHAIR";
+    private TransformGroup strayChairTG;          // animated when solved
+    private Shape3D        strayChairHitbox;      // invisible pickable hitbox
+    // World position of the stray chair (pulled out from seat i=2, angle≈2π/6*2)
+    private static final double STRAY_ANGLE      = Math.PI * 2.0 / 6.0 * 2.0; // 120°
+    private static final float  STRAY_CHAIR_DIST = TABLE_R + 2.35f;  // pulled out extra
+    private static final float  STRAY_CHAIR_X    = (float)(Math.cos(STRAY_ANGLE) * STRAY_CHAIR_DIST);
+    private static final float  STRAY_CHAIR_Z    = (float)(Math.sin(STRAY_ANGLE) * STRAY_CHAIR_DIST);
+    // Tucked-under destination (same angle, close to table edge)
+    private static final float  TUCKED_DIST      = TABLE_R - 0.30f;
+    private static final float  TUCKED_X         = (float)(Math.cos(STRAY_ANGLE) * TUCKED_DIST);
+    private static final float  TUCKED_Z         = (float)(Math.sin(STRAY_ANGLE) * TUCKED_DIST);
     private final Shape3D[] doorLightShapes = new Shape3D[3];
     private final PointLight[] doorLightNodes = new PointLight[3];
     private TransformGroup doorTG;
@@ -95,6 +129,7 @@ public class RoundtableHold extends JFrame {
         GraphicsConfiguration gc = SimpleUniverse.getPreferredConfiguration();
         Canvas3D canvas = new Canvas3D(gc);
         add(canvas, BorderLayout.CENTER);
+        installCenterCursor();
 
         SimpleUniverse universe = new SimpleUniverse(canvas);
         universe.getViewingPlatform().setNominalViewingTransform();
@@ -116,6 +151,50 @@ public class RoundtableHold extends JFrame {
         canvas.requestFocusInWindow();
     }
 
+    private void installCenterCursor() {
+        CrosshairGlassPane crosshair = new CrosshairGlassPane();
+        setGlassPane(crosshair);
+        crosshair.setVisible(true);
+    }
+
+    private static class CrosshairGlassPane extends JComponent {
+        CrosshairGlassPane() {
+            setOpaque(false);
+        }
+
+        protected void paintComponent(Graphics g) {
+            super.paintComponent(g);
+
+            Graphics2D g2 = (Graphics2D) g.create();
+            g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+
+            int cx = getWidth() / 2;
+            int cy = getHeight() / 2;
+            int len = 10;
+            int gap = 4;
+
+            g2.setStroke(new BasicStroke(3f));
+            g2.setColor(new Color(0, 0, 0, 170));
+            g2.drawLine(cx - len - 1, cy, cx - gap - 1, cy);
+            g2.drawLine(cx + gap + 1, cy, cx + len + 1, cy);
+            g2.drawLine(cx, cy - len - 1, cx, cy - gap - 1);
+            g2.drawLine(cx, cy + gap + 1, cx, cy + len + 1);
+
+            g2.setStroke(new BasicStroke(2f));
+            g2.setColor(new Color(255, 245, 210, 230));
+            g2.drawLine(cx - len, cy, cx - gap, cy);
+            g2.drawLine(cx + gap, cy, cx + len, cy);
+            g2.drawLine(cx, cy - len, cx, cy - gap);
+            g2.drawLine(cx, cy + gap, cx, cy + len);
+
+            g2.dispose();
+        }
+
+        public boolean contains(int x, int y) {
+            return false;
+        }
+    }
+
     // =========================================================================
     private BranchGroup buildScene(SimpleUniverse universe, Canvas3D canvas, TransformGroup vpTG) {
         BranchGroup root = new BranchGroup();
@@ -135,15 +214,18 @@ public class RoundtableHold extends JFrame {
         root.addChild(buildDiagArchwayAndHallway(SW_ANGLE));
         root.addChild(buildTable());
         root.addChild(buildChairs());
+        root.addChild(buildStrayChairHitbox());
         root.addChild(buildFireplace());
         root.addChild(buildGem());
+        root.addChild(buildPuzzleBoards());
         root.addChild(buildKeys());
         root.addChild(buildExitDoor());
 
-        FirstPersonController controller = new FirstPersonController(vpTG, canvas);
+        FirstPersonController controller = new FirstPersonController(vpTG, canvas, root);
         controller.setSchedulingBounds(wb());
         canvas.addKeyListener(controller);
         canvas.addMouseMotionListener(controller);
+        canvas.addMouseListener(controller);  // tracks mouseButtonHeld for robot suppression
         root.addChild(controller);
 
         return root;
@@ -605,17 +687,21 @@ public class RoundtableHold extends JFrame {
     private TransformGroup buildChairs() {
         TransformGroup group = new TransformGroup();
         Appearance chairWood = textureAppearance(new Color(75, 38, 18), new Color(125, 70, 32), 96, true);
-        float chairDistance = TABLE_R + 1.05f;
+
+        // Tucked-under distance — seat is slid beneath the table top
+        float tuckedDist = TABLE_R - 0.30f;
 
         for (int i = 0; i < 6; i++) {
             double angle = i * Math.PI * 2.0 / 6.0;
-            float x = (float) Math.cos(angle) * chairDistance;
-            float z = (float) Math.sin(angle) * chairDistance;
+
+            // Chair 2 (i==2) is the STRAY chair — built separately below
+            if (i == 2) continue;
+
+            float x = (float) Math.cos(angle) * tuckedDist;
+            float z = (float) Math.sin(angle) * tuckedDist;
 
             Transform3D pos = new Transform3D();
             pos.setTranslation(new Vector3f(x, FLOOR_Y + 0.55f, z));
-
-            // Rotate each chair so its front faces the table center.
             Transform3D rot = new Transform3D();
             rot.rotY(-angle + Math.PI / 2.0);
             pos.mul(rot);
@@ -624,6 +710,19 @@ public class RoundtableHold extends JFrame {
             chairTG.addChild(makeChair(chairWood));
             group.addChild(chairTG);
         }
+
+        // ── stray chair (puzzle 2) ────────────────────────────────────────────
+        // Sits pulled out from the table, clearly out of place
+        Transform3D strayPos = new Transform3D();
+        strayPos.setTranslation(new Vector3f(STRAY_CHAIR_X, FLOOR_Y + 0.55f, STRAY_CHAIR_Z));
+        Transform3D strayRot = new Transform3D();
+        strayRot.rotY(-(float)STRAY_ANGLE + (float)(Math.PI / 2.0));
+        strayPos.mul(strayRot);
+
+        strayChairTG = new TransformGroup(strayPos);
+        strayChairTG.setCapability(TransformGroup.ALLOW_TRANSFORM_WRITE);
+        strayChairTG.addChild(makeChair(chairWood));
+        group.addChild(strayChairTG);
 
         return group;
     }
@@ -649,9 +748,61 @@ public class RoundtableHold extends JFrame {
         return chair;
     }
 
-    // =========================================================================
-    // FIREPLACE
-    // =========================================================================
+    /** Invisible pickable box that surrounds the stray chair so the player can interact with it. */
+    private TransformGroup buildStrayChairHitbox() {
+        TransformGroup group = new TransformGroup();
+
+        // A tall-ish box centred on the stray chair's world position
+        float hx = 0.60f, hy = 0.80f, hz = 0.60f;
+        float cx = STRAY_CHAIR_X;
+        float cy = FLOOR_Y + 0.55f + hy / 2f;
+        float cz = STRAY_CHAIR_Z;
+
+        // Six-sided invisible hitbox (top face is the most reliably picked by crosshair)
+        // Top face — stored as the primary hitbox reference
+        strayChairHitbox = makeHitboxFace(
+            p(cx - hx, cy + hy, cz - hz), p(cx + hx, cy + hy, cz - hz),
+            p(cx + hx, cy + hy, cz + hz), p(cx - hx, cy + hy, cz + hz),
+            new float[]{0, 1, 0});
+        group.addChild(strayChairHitbox);
+
+        // Front face
+        group.addChild(makeHitboxFace(
+            p(cx - hx, cy - hy, cz + hz), p(cx + hx, cy - hy, cz + hz),
+            p(cx + hx, cy + hy, cz + hz), p(cx - hx, cy + hy, cz + hz),
+            new float[]{0, 0, 1}));
+
+        // Back face
+        group.addChild(makeHitboxFace(
+            p(cx + hx, cy - hy, cz - hz), p(cx - hx, cy - hy, cz - hz),
+            p(cx - hx, cy + hy, cz - hz), p(cx + hx, cy + hy, cz - hz),
+            new float[]{0, 0, -1}));
+
+        // Left face
+        group.addChild(makeHitboxFace(
+            p(cx - hx, cy - hy, cz - hz), p(cx - hx, cy - hy, cz + hz),
+            p(cx - hx, cy + hy, cz + hz), p(cx - hx, cy + hy, cz - hz),
+            new float[]{-1, 0, 0}));
+
+        // Right face
+        group.addChild(makeHitboxFace(
+            p(cx + hx, cy - hy, cz + hz), p(cx + hx, cy - hy, cz - hz),
+            p(cx + hx, cy + hy, cz - hz), p(cx + hx, cy + hy, cz + hz),
+            new float[]{1, 0, 0}));
+
+        return group;
+    }
+
+    /** Creates one invisible pickable quad face for the stray-chair hitbox. */
+    private Shape3D makeHitboxFace(float[] bl, float[] br, float[] tr, float[] tl, float[] n) {
+        Shape3D face = new Shape3D(quadGeo(bl, br, tr, tl, n), invisiblePickAppearance());
+        face.setUserData(PUZZLE2_CHAIR);
+        face.setCapability(Shape3D.ALLOW_APPEARANCE_WRITE);
+        face.setCapability(Node.ALLOW_PICKABLE_WRITE);   // required to call setPickable() at runtime
+        face.setPickable(true);
+        return face;
+    }
+
     private TransformGroup buildFireplace() {
         TransformGroup group = new TransformGroup();
 
@@ -671,23 +822,19 @@ public class RoundtableHold extends JFrame {
 
         TransformGroup fp = new TransformGroup(base);
 
-        // Fireplace back/opening
         fp.addChild(translated(0f, 0f, -0.06f,
                 new com.sun.j3d.utils.geometry.Box(0.85f, 0.75f, 0.08f, flags, dark)));
 
-        // Stone side pillars
         fp.addChild(translated(-1.05f, 0f, 0f,
                 new com.sun.j3d.utils.geometry.Box(0.22f, 0.95f, 0.25f, flags, stone)));
         fp.addChild(translated(1.05f, 0f, 0f,
                 new com.sun.j3d.utils.geometry.Box(0.22f, 0.95f, 0.25f, flags, stone)));
 
-        // Stone mantle and hearth
         fp.addChild(translated(0f, 0.95f, 0f,
                 new com.sun.j3d.utils.geometry.Box(1.35f, 0.22f, 0.28f, flags, stone)));
         fp.addChild(translated(0f, -0.78f, 0.12f,
                 new com.sun.j3d.utils.geometry.Box(1.45f, 0.18f, 0.55f, flags, stone)));
 
-        // Small logs inside the fireplace
         Appearance logApp = textureAppearance(new Color(78, 42, 19), new Color(135, 82, 36), 64, true);
         Cylinder log1 = new Cylinder(0.06f, 0.85f,
                 Cylinder.GENERATE_NORMALS | Cylinder.GENERATE_TEXTURE_COORDS, 16, 1, logApp);
@@ -714,94 +861,81 @@ public class RoundtableHold extends JFrame {
         log2TG.addChild(log2);
         fp.addChild(log2TG);
 
-        // Visible 3D flames inside the fireplace.
-// IMPORTANT: z is NEGATIVE because the fireplace is rotated.
-fp.addChild(translated(-0.22f, -0.28f, -0.10f,
-        new com.sun.j3d.utils.geometry.Cone(
-                0.22f, 0.85f,
-                com.sun.j3d.utils.geometry.Primitive.GENERATE_NORMALS,
-                24, 1,
-                fireSolidAppearance(new Color3f(1.0f, 0.18f, 0.02f))
-        )));
+        fp.addChild(translated(-0.22f, -0.28f, -0.10f,
+                new com.sun.j3d.utils.geometry.Cone(
+                        0.22f, 0.85f,
+                        com.sun.j3d.utils.geometry.Primitive.GENERATE_NORMALS,
+                        24, 1,
+                        fireSolidAppearance(new Color3f(1.0f, 0.18f, 0.02f))
+                )));
 
-fp.addChild(translated(0.0f, -0.20f, -0.14f,
-        new com.sun.j3d.utils.geometry.Cone(
-                0.28f, 1.05f,
-                com.sun.j3d.utils.geometry.Primitive.GENERATE_NORMALS,
-                24, 1,
-                fireSolidAppearance(new Color3f(1.0f, 0.55f, 0.05f))
-        )));
+        fp.addChild(translated(0.0f, -0.20f, -0.14f,
+                new com.sun.j3d.utils.geometry.Cone(
+                        0.28f, 1.05f,
+                        com.sun.j3d.utils.geometry.Primitive.GENERATE_NORMALS,
+                        24, 1,
+                        fireSolidAppearance(new Color3f(1.0f, 0.55f, 0.05f))
+                )));
 
-fp.addChild(translated(0.22f, -0.32f, -0.10f,
-        new com.sun.j3d.utils.geometry.Cone(
-                0.18f, 0.75f,
-                com.sun.j3d.utils.geometry.Primitive.GENERATE_NORMALS,
-                24, 1,
-                fireSolidAppearance(new Color3f(1.0f, 0.85f, 0.15f))
-        )));
+        fp.addChild(translated(0.22f, -0.32f, -0.10f,
+                new com.sun.j3d.utils.geometry.Cone(
+                        0.18f, 0.75f,
+                        com.sun.j3d.utils.geometry.Primitive.GENERATE_NORMALS,
+                        24, 1,
+                        fireSolidAppearance(new Color3f(1.0f, 0.85f, 0.15f))
+                )));
 
-        // Chimney above the fireplace, rising toward the ceiling
         fp.addChild(translated(0f, 2.25f, -0.04f,
                 new com.sun.j3d.utils.geometry.Box(0.45f, 1.35f, 0.38f, flags, chimneyApp)));
 
-        // Chimney cap near the ceiling
         fp.addChild(translated(0f, 3.60f, -0.04f,
                 new com.sun.j3d.utils.geometry.Box(0.60f, 0.18f, 0.50f, flags, chimneyApp)));
 
         group.addChild(fp);
 
-        // Main fire light in world space. It flickers using a Java3D Behavior.
         PointLight fireLight = new PointLight(
-        new Color3f(1.0f, 0.5f, 0.1f),
-        new Point3f(ROOM_R - 1.0f, FLOOR_Y + 1.1f, 0f),
-        new Point3f(0.1f, 0.05f, 0.01f)
-);
-
-// 🔥 REQUIRED capabilities
-fireLight.setCapability(PointLight.ALLOW_COLOR_WRITE);
-fireLight.setCapability(PointLight.ALLOW_ATTENUATION_WRITE);
-
-fireLight.setInfluencingBounds(wb());
-
-group.addChild(fireLight);
+                new Color3f(1.0f, 0.5f, 0.1f),
+                new Point3f(ROOM_R - 1.0f, FLOOR_Y + 1.1f, 0f),
+                new Point3f(0.1f, 0.05f, 0.01f)
+        );
+        fireLight.setCapability(PointLight.ALLOW_COLOR_WRITE);
+        fireLight.setCapability(PointLight.ALLOW_ATTENUATION_WRITE);
+        fireLight.setInfluencingBounds(wb());
+        group.addChild(fireLight);
 
         PointLight upperFireGlow = new PointLight(
-        new Color3f(1.0f, 0.72f, 0.22f),
-        new Point3f(ROOM_R - 1.0f, FLOOR_Y + 1.9f, 0f),
-        new Point3f(0.05f, 0.02f, 0.005f)
-);
+                new Color3f(1.0f, 0.72f, 0.22f),
+                new Point3f(ROOM_R - 1.0f, FLOOR_Y + 1.9f, 0f),
+                new Point3f(0.05f, 0.02f, 0.005f)
+        );
+        upperFireGlow.setCapability(PointLight.ALLOW_COLOR_WRITE);
+        upperFireGlow.setCapability(PointLight.ALLOW_ATTENUATION_WRITE);
+        upperFireGlow.setInfluencingBounds(wb());
+        group.addChild(upperFireGlow);
 
-upperFireGlow.setCapability(PointLight.ALLOW_COLOR_WRITE);
-upperFireGlow.setCapability(PointLight.ALLOW_ATTENUATION_WRITE);
-upperFireGlow.setInfluencingBounds(wb());
-group.addChild(upperFireGlow);
+        Appearance glowApp = new Appearance();
+        glowApp.setColoringAttributes(new ColoringAttributes(
+                1.0f, 0.45f, 0.05f,
+                ColoringAttributes.SHADE_GOURAUD
+        ));
+        glowApp.setTransparencyAttributes(new TransparencyAttributes(
+                TransparencyAttributes.BLENDED,
+                0.65f
+        ));
+        PolygonAttributes glowPA = new PolygonAttributes();
+        glowPA.setCullFace(PolygonAttributes.CULL_NONE);
+        glowApp.setPolygonAttributes(glowPA);
+        RenderingAttributes glowRA = new RenderingAttributes();
+        glowRA.setDepthBufferWriteEnable(false);
+        glowApp.setRenderingAttributes(glowRA);
 
-Appearance glowApp = new Appearance();
-glowApp.setColoringAttributes(new ColoringAttributes(
-        1.0f, 0.45f, 0.05f,
-        ColoringAttributes.SHADE_GOURAUD
-));
-
-glowApp.setTransparencyAttributes(new TransparencyAttributes(
-        TransparencyAttributes.BLENDED,
-        0.65f
-));
-
-PolygonAttributes glowPA = new PolygonAttributes();
-glowPA.setCullFace(PolygonAttributes.CULL_NONE);
-glowApp.setPolygonAttributes(glowPA);
-
-RenderingAttributes glowRA = new RenderingAttributes();
-glowRA.setDepthBufferWriteEnable(false);
-glowApp.setRenderingAttributes(glowRA);
-
-fp.addChild(translated(0f, -0.18f, -0.50f,
-        new com.sun.j3d.utils.geometry.Sphere(
-                0.62f,
-                com.sun.j3d.utils.geometry.Primitive.GENERATE_NORMALS,
-                32,
-                glowApp
-        )));
+        fp.addChild(translated(0f, -0.18f, -0.50f,
+                new com.sun.j3d.utils.geometry.Sphere(
+                        0.62f,
+                        com.sun.j3d.utils.geometry.Primitive.GENERATE_NORMALS,
+                        32,
+                        glowApp
+                )));
 
         FireFlickerBehavior flicker = new FireFlickerBehavior(fireLight, upperFireGlow);
         flicker.setSchedulingBounds(wb());
@@ -809,25 +943,23 @@ fp.addChild(translated(0f, -0.18f, -0.50f,
 
         return group;
     }
+
     private Appearance fireSolidAppearance(Color3f color) {
-    Appearance app = new Appearance();
+        Appearance app = new Appearance();
+        Material m = new Material();
+        m.setLightingEnable(true);
+        m.setAmbientColor(color);
+        m.setDiffuseColor(color);
+        m.setEmissiveColor(color);
+        m.setSpecularColor(new Color3f(1.0f, 0.8f, 0.3f));
+        m.setShininess(64f);
+        app.setMaterial(m);
+        PolygonAttributes pa = new PolygonAttributes();
+        pa.setCullFace(PolygonAttributes.CULL_NONE);
+        app.setPolygonAttributes(pa);
+        return app;
+    }
 
-    Material m = new Material();
-    m.setLightingEnable(true);
-    m.setAmbientColor(color);
-    m.setDiffuseColor(color);
-    m.setEmissiveColor(color);
-    m.setSpecularColor(new Color3f(1.0f, 0.8f, 0.3f));
-    m.setShininess(64f);
-
-    app.setMaterial(m);
-
-    PolygonAttributes pa = new PolygonAttributes();
-    pa.setCullFace(PolygonAttributes.CULL_NONE);
-    app.setPolygonAttributes(pa);
-
-    return app;
-}
     // =========================================================================
     // GEM
     // =========================================================================
@@ -859,18 +991,21 @@ fp.addChild(translated(0f, -0.18f, -0.50f,
     private TransformGroup buildKeys() {
         TransformGroup group = new TransformGroup();
         Appearance keyApp = matEmissive(c(0.45f, 0.30f, 0.04f), c(1.0f, 0.78f, 0.18f), c(0.45f, 0.28f, 0.02f));
+
         for (int i = 0; i < KEY_POSITIONS.length; i++) {
             Shape3D keyShape = new Shape3D(octahedron(0.22f), keyApp);
+
             TransformGroup spinTG = new TransformGroup();
             spinTG.setCapability(TransformGroup.ALLOW_TRANSFORM_WRITE);
+
             RotationInterpolator spin = new RotationInterpolator(new Alpha(-1, 2200), spinTG,
                     new Transform3D(), 0f, (float) (2 * Math.PI));
             spin.setSchedulingBounds(wb());
+
             spinTG.addChild(keyShape);
             spinTG.addChild(spin);
-            Transform3D pos = new Transform3D();
-            pos.setTranslation(new Vector3f(KEY_POSITIONS[i].x, KEY_POSITIONS[i].y, KEY_POSITIONS[i].z));
-            keyTGs[i] = new TransformGroup(pos);
+
+            keyTGs[i] = new TransformGroup(hiddenKeyTransform(i));
             keyTGs[i].setCapability(TransformGroup.ALLOW_TRANSFORM_WRITE);
             keyTGs[i].addChild(spinTG);
             group.addChild(keyTGs[i]);
@@ -878,19 +1013,101 @@ fp.addChild(translated(0f, -0.18f, -0.50f,
         return group;
     }
 
+    private Transform3D visibleKeyTransform(int index) {
+        Transform3D t = new Transform3D();
+        t.setTranslation(new Vector3f(KEY_POSITIONS[index].x, KEY_POSITIONS[index].y, KEY_POSITIONS[index].z));
+        return t;
+    }
+
+    private Transform3D hiddenKeyTransform(int index) {
+    Transform3D t = new Transform3D();
+    t.setTranslation(new Vector3f(
+            KEY_POSITIONS[index].x,
+            FLOOR_Y - 0.55f,
+            KEY_POSITIONS[index].z
+    ));
+    return t;
+}
+
+    private void spawnKey(int index) {
+    if (index < 0 || index >= keyTGs.length) return;
+    if (keySpawned[index] || keyTaken[index]) return;
+
+    keySpawned[index] = true;
+
+    new Thread(() -> {
+        long durationMs = 1200;
+        long startTime = System.currentTimeMillis();
+
+        float startY = FLOOR_Y - 0.55f;
+        float endY = KEY_POSITIONS[index].y;
+
+        while (true) {
+            long elapsed = System.currentTimeMillis() - startTime;
+            float t = Math.min(elapsed / (float) durationMs, 1.0f);
+
+            // smooth ease-out
+            float ease = 1f - (1f - t) * (1f - t);
+
+            float currentY = startY + (endY - startY) * ease;
+
+            Transform3D tx = new Transform3D();
+            tx.setTranslation(new Vector3f(
+                    KEY_POSITIONS[index].x,
+                    currentY,
+                    KEY_POSITIONS[index].z
+            ));
+
+            keyTGs[index].setTransform(tx);
+
+            if (t >= 1.0f) break;
+
+            try {
+                Thread.sleep(16);
+            } catch (InterruptedException ignored) {}
+        }
+    }, "key-rise-" + index).start();
+}
+
+    private void answerPuzzle1Wrong(int chosenIndex) {
+        if (puzzleSolved[0]) return;
+        puzzle1LastWrong = chosenIndex;
+        // Redraw board: show ✗ on the wrong guess but keep cursor visible so player can retry
+        if (puzzle1PaperShape != null) {
+            puzzle1PaperShape.setAppearance(puzzlePaperAppearance(puzzle1LastWrong, puzzle1CursorPos));
+        }
+    }
+
+    private TransformGroup buildPuzzleBoards() {
+        TransformGroup group = new TransformGroup();
+
+        float boardW = 6.2f;
+        float boardH = 3.4f;
+        float centerX = 0f;
+        float centerY = FLOOR_Y + 2.75f;
+        float z = SOUTH_Z - 0.18f;
+
+        puzzle1PaperShape = new Shape3D(
+                texturedQuadGeo(centerX - boardW / 2f, centerY - boardH / 2f, z,
+                        centerX + boardW / 2f, centerY + boardH / 2f, z,
+                        new float[] { 0, 0, -1 }),
+                puzzlePaperAppearance(-1, 0));
+        puzzle1PaperShape.setCapability(Shape3D.ALLOW_APPEARANCE_WRITE);
+        puzzle1PaperShape.setPickable(false);
+        group.addChild(puzzle1PaperShape);
+
+        return group;
+    }
+
+    /** Returns true if the player is close enough to the south puzzle board to interact. */
+    private boolean nearPuzzleBoard(float px, float pz) {
+        float dz = pz - BOARD_Z;
+        return (px * px + dz * dz) < BOARD_INTERACT_DIST * BOARD_INTERACT_DIST;
+    }
+
     private TransformGroup buildExitDoor() {
         TransformGroup group = new TransformGroup();
         Appearance doorApp = matEmissive(c(0.22f, 0.13f, 0.06f), c(0.45f, 0.26f, 0.12f), c(0.06f, 0.03f, 0.01f));
-
-        // ── door panel ────────────────────────────────────────────────────────
-        // Placed just inside the north archway opening, filling it exactly.
-        // The arch opening is ARCH_W wide and ARCH_TOTAL tall (rectangular part
-        // + semicircle). We cover the full rectangular height with a flat slab.
-        //
-        // Box(half-x, half-y, half-z) centred at its transform translation.
-        // Half-widths: x = ARCH_W/2, y = ARCH_TOTAL/2, z = 0.1 (thin slab)
-        // Centre Y: FLOOR_Y + ARCH_TOTAL/2 (so bottom sits on floor)
-        // Centre Z: NORTH_Z - 0.12 (just inside the arch, inside room)
 
         float doorHalfW = ARCH_W / 2f;
         float doorHalfH = ARCH_TOTAL / 2f;
@@ -899,7 +1116,6 @@ fp.addChild(translated(0f, -0.18f, -0.50f,
 
         doorTG = new TransformGroup();
         doorTG.setCapability(TransformGroup.ALLOW_TRANSFORM_WRITE);
-        // Store closed position Y for the interpolator
         Transform3D doorPos = new Transform3D();
         doorPos.setTranslation(new Vector3f(0f, doorCentreY, doorZ));
         doorTG.setTransform(doorPos);
@@ -908,11 +1124,10 @@ fp.addChild(translated(0f, -0.18f, -0.50f,
                 com.sun.j3d.utils.geometry.Primitive.GENERATE_NORMALS, doorApp));
         group.addChild(doorTG);
 
-        // ── indicator lights above the arch trim, inside the room ────────────
         Appearance lightOff = lightAppearance(false);
         float[] xs = { -0.9f, 0f, 0.9f };
-        float lightY = FLOOR_Y + ARCH_TOTAL + ARCH_TRIM + 0.35f; // just above arch
-        float lightZ = NORTH_Z + 0.5f; // inside room side
+        float lightY = FLOOR_Y + ARCH_TOTAL + ARCH_TRIM + 0.35f;
+        float lightZ = NORTH_Z + 0.5f;
 
         for (int i = 0; i < 3; i++) {
             doorLightShapes[i] = new Shape3D(octahedron(0.18f), lightOff);
@@ -937,14 +1152,14 @@ fp.addChild(translated(0f, -0.18f, -0.50f,
     }
 
     private void collectKey(int index) {
-        if (keyTaken[index])
+        if (!keySpawned[index] || keyTaken[index])
             return;
         keyTaken[index] = true;
         collectedKeys++;
-        Transform3D hide = new Transform3D();
-        hide.setScale(0.001);
-        hide.setTranslation(new Vector3f(KEY_POSITIONS[index].x, -100f, KEY_POSITIONS[index].z));
-        keyTGs[index].setTransform(hide);
+        Transform3D gone = new Transform3D();
+        gone.setScale(0.001);
+        gone.setTranslation(new Vector3f(KEY_POSITIONS[index].x, FLOOR_Y - 2f, KEY_POSITIONS[index].z));
+        keyTGs[index].setTransform(gone);
         int li = collectedKeys - 1;
         doorLightShapes[li].setAppearance(lightAppearance(true));
         doorLightNodes[li].setEnable(true);
@@ -953,22 +1168,10 @@ fp.addChild(translated(0f, -0.18f, -0.50f,
     }
 
     private void openDoor() {
-        // Smoothly slide the door upward out of the archway over 1.8 seconds.
-        // We use a PositionInterpolator on a child TransformGroup of doorTG so the
-        // door's base position is preserved and only the Y offset is animated.
         float doorCentreY = FLOOR_Y + ARCH_TOTAL / 2f;
         float doorZ = NORTH_Z - 0.12f;
-
-        // Detach the door slab from its old fixed TG and re-parent under an
-        // animated offset TG. Because the scene is already live we cannot do full
-        // detach/re-attach easily, so instead we set a new static transform on
-        // doorTG that slides it above the ceiling over time via a thread.
-        // Java3D Interpolators require the Alpha/Behavior to be in the live scene,
-        // so we add a BranchGroup with the behavior into the root BranchGroup,
-        // but the simplest reliable approach here is a timer thread that steps
-        // the transform each frame manually.
         float startY = doorCentreY;
-        float endY = FLOOR_Y + ARCH_TOTAL + ARCH_TOTAL; // fully above arch opening
+        float endY = FLOOR_Y + ARCH_TOTAL + ARCH_TOTAL;
 
         new Thread(() -> {
             long durationMs = 1800;
@@ -976,14 +1179,11 @@ fp.addChild(translated(0f, -0.18f, -0.50f,
             while (true) {
                 long elapsed = System.currentTimeMillis() - startTime;
                 float t = Math.min(elapsed / (float) durationMs, 1.0f);
-                // Ease-out: decelerate as door reaches top
                 float ease = 1f - (1f - t) * (1f - t);
                 float currentY = startY + (endY - startY) * ease;
-
                 Transform3D tx = new Transform3D();
                 tx.setTranslation(new Vector3f(0f, currentY, doorZ));
                 doorTG.setTransform(tx);
-
                 if (t >= 1.0f)
                     break;
                 try {
@@ -1016,75 +1216,142 @@ fp.addChild(translated(0f, -0.18f, -0.50f,
     // =========================================================================
     // FIRE FLICKER BEHAVIOR
     // =========================================================================
-   private class FireFlickerBehavior extends Behavior {
-    private final PointLight mainLight;
-    private final PointLight upperGlow;
-    private final WakeupOnElapsedFrames wakeup = new WakeupOnElapsedFrames(0);
+    private class FireFlickerBehavior extends Behavior {
+        private final PointLight mainLight;
+        private final PointLight upperGlow;
+        private final WakeupOnElapsedFrames wakeup = new WakeupOnElapsedFrames(4);
 
-    FireFlickerBehavior(PointLight mainLight, PointLight upperGlow) {
-        this.mainLight = mainLight;
-        this.upperGlow = upperGlow;
+        FireFlickerBehavior(PointLight mainLight, PointLight upperGlow) {
+            this.mainLight = mainLight;
+            this.upperGlow = upperGlow;
+        }
+
+        public void initialize() {
+            wakeupOn(wakeup);
+        }
+
+        public void processStimulus(java.util.Enumeration criteria) {
+            float flicker = 0.85f + (float) Math.random() * 0.25f;
+            float r = 0.85f + (float) Math.random() * 0.15f;
+            float g = 0.32f + (float) Math.random() * 0.35f;
+            float b = 0.03f + (float) Math.random() * 0.05f;
+            mainLight.setColor(new Color3f(r, g, b));
+            upperGlow.setColor(new Color3f(
+                    0.85f * flicker,
+                    0.42f * flicker,
+                    0.08f * flicker
+            ));
+            mainLight.setAttenuation(new Point3f(
+                    0.025f + (float) Math.random() * 0.015f,
+                    0.010f + (float) Math.random() * 0.010f,
+                    0.001f + (float) Math.random() * 0.002f
+            ));
+            upperGlow.setAttenuation(new Point3f(
+                    0.045f + (float) Math.random() * 0.015f,
+                    0.018f + (float) Math.random() * 0.008f,
+                    0.004f + (float) Math.random() * 0.002f
+            ));
+            wakeupOn(wakeup);
+        }
+    }
+    private void selectPuzzle1Answer(int chosenIndex) {
+        if (puzzleSolved[0]) return;
+
+        if (chosenIndex == 1) {
+            // Correct answer: (b) Ambient Light
+            puzzleSolved[0] = true;
+            if (puzzle1PaperShape != null) {
+                // Show final solved state: ✓ on correct answer, no cursor
+                puzzle1PaperShape.setAppearance(puzzlePaperAppearance(chosenIndex, puzzle1CursorPos));
+            }
+            spawnKey(0);
+        } else {
+            answerPuzzle1Wrong(chosenIndex);
+        }
     }
 
-    public void initialize() {
-        wakeupOn(wakeup);
+    // ── puzzle 2 solution ─────────────────────────────────────────────────────
+    private void solvePuzzle2() {
+        if (puzzleSolved[1]) return;
+        puzzleSolved[1] = true;
+
+        // Hide the hitbox so it can no longer be interacted with
+        strayChairHitbox.setPickable(false);
+
+        // Animate the stray chair sliding under the table
+        float startX = STRAY_CHAIR_X;
+        float startZ = STRAY_CHAIR_Z;
+        float endX   = TUCKED_X;
+        float endZ   = TUCKED_Z;
+        float chairY = FLOOR_Y + 0.55f;
+        float chairRot = -(float)STRAY_ANGLE + (float)(Math.PI / 2.0);
+
+        new Thread(() -> {
+            long durationMs = 900;
+            long startTime  = System.currentTimeMillis();
+            while (true) {
+                long elapsed = System.currentTimeMillis() - startTime;
+                float t = Math.min(elapsed / (float) durationMs, 1.0f);
+                // ease-out cubic
+                float ease = 1f - (1f - t) * (1f - t) * (1f - t);
+
+                float cx = startX + (endX - startX) * ease;
+                float cz = startZ + (endZ - startZ) * ease;
+
+                Transform3D tx = new Transform3D();
+                tx.setTranslation(new Vector3f(cx, chairY, cz));
+                Transform3D rot = new Transform3D();
+                rot.rotY(chairRot);
+                tx.mul(rot);
+                strayChairTG.setTransform(tx);
+
+                if (t >= 1.0f) break;
+                try { Thread.sleep(16); } catch (InterruptedException ignored) {}
+            }
+            // Once the chair is fully tucked, rise the key
+            spawnKey(1);
+        }, "chair-push").start();
     }
-
-    public void processStimulus(java.util.Enumeration criteria) {
-        float flicker = 0.85f + (float) Math.random() * 0.25f;
-
-        float r = 0.85f + (float) Math.random() * 0.15f;
-        float g = 0.32f + (float) Math.random() * 0.35f;
-        float b = 0.03f + (float) Math.random() * 0.05f;
-
-        mainLight.setColor(new Color3f(r, g, b));
-        upperGlow.setColor(new Color3f(
-                0.85f * flicker,
-                0.42f * flicker,
-                0.08f * flicker
-        ));
-
-        mainLight.setAttenuation(new Point3f(
-                0.025f + (float) Math.random() * 0.015f,
-                0.010f + (float) Math.random() * 0.010f,
-                0.001f + (float) Math.random() * 0.002f
-        ));
-
-        upperGlow.setAttenuation(new Point3f(
-                0.045f + (float) Math.random() * 0.015f,
-                0.018f + (float) Math.random() * 0.008f,
-                0.004f + (float) Math.random() * 0.002f
-        ));
-
-        wakeupOn(wakeup);
-    }
-}
-
+    // =========================================================================
+    // PUZZLE CLICK HANDLER
+    // =========================================================================
     // =========================================================================
     // FIRST-PERSON CONTROLLER
     // =========================================================================
-    private class FirstPersonController extends Behavior implements KeyListener, MouseMotionListener {
+    private class FirstPersonController extends Behavior implements KeyListener, MouseMotionListener, MouseListener {
         private final TransformGroup viewTG;
         private final Canvas3D canvas;
+        private final PickCanvas hoverPickCanvas;
         private final WakeupOnElapsedFrames wakeup = new WakeupOnElapsedFrames(0);
         private final boolean[] keys = new boolean[256];
         private float x = 0f, z = 10f, yaw = 0f, pitch = 0f;
-
-        // Robot warps the mouse back to canvas centre each frame so it never hits
-        // the screen edge — this gives true captured FPS mouse look.
+        private long lastFrameTime = System.nanoTime();
+        private int hoverFrameSkip = 0;
         private Robot robot;
         private boolean robotReady = false;
-        private boolean firstWarp = true; // skip the delta on the very first warp
+        private boolean firstWarp = true;
+        private volatile boolean mouseButtonHeld = false; // suppress warp during click
 
-        FirstPersonController(TransformGroup viewTG, Canvas3D canvas) {
+        FirstPersonController(TransformGroup viewTG, Canvas3D canvas, BranchGroup root) {
             this.viewTG = viewTG;
             this.canvas = canvas;
+            this.hoverPickCanvas = new PickCanvas(canvas, root);
+            this.hoverPickCanvas.setMode(PickTool.BOUNDS);
+            this.hoverPickCanvas.setTolerance(6.0f);
 
-            // Hide the OS cursor inside the canvas
-            BufferedImage blank = new BufferedImage(16, 16, BufferedImage.TYPE_INT_ARGB);
-            Cursor invisible = Toolkit.getDefaultToolkit().createCustomCursor(
-                    blank, new Point(0, 0), "invisible");
-            canvas.setCursor(invisible);
+            BufferedImage cursorImg = new BufferedImage(32, 32, BufferedImage.TYPE_INT_ARGB);
+            Graphics2D g = cursorImg.createGraphics();
+            g.setColor(Color.WHITE);
+            g.setStroke(new BasicStroke(2f));
+            g.drawLine(16, 6, 16, 13);
+            g.drawLine(16, 19, 16, 26);
+            g.drawLine(6, 16, 13, 16);
+            g.drawLine(19, 16, 26, 16);
+            g.dispose();
+
+            Cursor crosshairCursor = Toolkit.getDefaultToolkit().createCustomCursor(
+                    cursorImg, new Point(16, 16), "crosshair");
+            canvas.setCursor(crosshairCursor);
 
             try {
                 robot = new Robot();
@@ -1099,74 +1366,106 @@ fp.addChild(translated(0f, -0.18f, -0.50f,
         }
 
         public void processStimulus(java.util.Enumeration criteria) {
-            updateMovement();
-            checkKeyPickups();
-            // Re-centre the mouse every frame so movement is always relative to centre
-            if (robotReady && canvas.isShowing()) {
-                Point loc = canvas.getLocationOnScreen();
-                int cx = loc.x + canvas.getWidth() / 2;
-                int cy = loc.y + canvas.getHeight() / 2;
-                robot.mouseMove(cx, cy);
-                firstWarp = false;
+    long now = System.nanoTime();
+    float dt = (now - lastFrameTime) / 1_000_000_000.0f;
+    lastFrameTime = now;
+
+    // Prevent giant jumps after lag/spikes
+    if (dt > 0.05f) dt = 0.05f;
+
+    updateMovement(dt);
+    checkKeyPickups();
+
+    // Picking every frame is expensive, so only do hover checks every 5 frames
+    hoverFrameSkip++;
+    if (hoverFrameSkip >= 5) {
+        updateHoverHighlight();
+        hoverFrameSkip = 0;
+    }
+
+    if (robotReady && canvas.isShowing() && !mouseButtonHeld) {
+        Point loc = canvas.getLocationOnScreen();
+        int cx = loc.x + canvas.getWidth() / 2;
+        int cy = loc.y + canvas.getHeight() / 2;
+        robot.mouseMove(cx, cy);
+        firstWarp = false;
+    }
+
+    wakeupOn(wakeup);
+}
+
+        private boolean hoveringStrayChair = false;
+
+        private void updateHoverHighlight() {
+            hoveringStrayChair = false;
+
+            if (puzzleSolved[1]) return; // stray chair already solved, skip pick
+            if (hoverPickCanvas == null || canvas == null || !canvas.isShowing()) return;
+
+            hoverPickCanvas.setShapeLocation(canvas.getWidth() / 2, canvas.getHeight() / 2);
+            PickResult result = hoverPickCanvas.pickClosest();
+            if (result == null) return;
+
+            Node node = result.getNode(PickResult.SHAPE3D);
+            if (node instanceof Shape3D && PUZZLE2_CHAIR.equals(node.getUserData())) {
+                hoveringStrayChair = true;
             }
-            wakeupOn(wakeup);
         }
 
-        private void updateMovement() {
-            float forward = 0f, strafe = 0f;
-            if (down(KeyEvent.VK_W))
-                forward += 1f;
-            if (down(KeyEvent.VK_S))
-                forward -= 1f;
-            if (down(KeyEvent.VK_A))
-                strafe -= 1f;
-            if (down(KeyEvent.VK_D))
-                strafe += 1f;
-            if (down(KeyEvent.VK_LEFT))
-                yaw += 0.045f;
-            if (down(KeyEvent.VK_RIGHT))
-                yaw -= 0.045f;
-            if (down(KeyEvent.VK_UP))
-                pitch += 0.035f;
-            if (down(KeyEvent.VK_DOWN))
-                pitch -= 0.035f;
-            clampPitch();
-            if (forward != 0f || strafe != 0f) {
-                float len = (float) Math.sqrt(forward * forward + strafe * strafe);
-                forward /= len;
-                strafe /= len;
-                float sin = (float) Math.sin(yaw), cos = (float) Math.cos(yaw);
-                float dx = (-sin * forward + cos * strafe) * WALK_SPEED;
-                float dz = (-cos * forward - sin * strafe) * WALK_SPEED;
-                if (isWalkable(x + dx, z))
-                    x += dx;
-                if (isWalkable(x, z + dz))
-                    z += dz;
-            }
-            Transform3D yawT = new Transform3D();
-            yawT.rotY(yaw);
-            Transform3D pitchT = new Transform3D();
-            pitchT.rotX(pitch);
-            yawT.mul(pitchT);
-            yawT.setTranslation(new Vector3f(x, PLAYER_EYE_Y, z));
-            viewTG.setTransform(yawT);
-        }
+        private void updateMovement(float dt) {
+    float forward = 0f, strafe = 0f;
+
+    if (down(KeyEvent.VK_W)) forward += 1f;
+    if (down(KeyEvent.VK_S)) forward -= 1f;
+    if (down(KeyEvent.VK_A)) strafe -= 1f;
+    if (down(KeyEvent.VK_D)) strafe += 1f;
+
+    if (down(KeyEvent.VK_LEFT)) yaw += TURN_SPEED * dt;
+    if (down(KeyEvent.VK_RIGHT)) yaw -= TURN_SPEED * dt;
+    if (down(KeyEvent.VK_UP)) pitch += TURN_SPEED * dt;
+    if (down(KeyEvent.VK_DOWN)) pitch -= TURN_SPEED * dt;
+
+    clampPitch();
+
+    if (forward != 0f || strafe != 0f) {
+        float len = (float) Math.sqrt(forward * forward + strafe * strafe);
+        forward /= len;
+        strafe /= len;
+
+        float sin = (float) Math.sin(yaw);
+        float cos = (float) Math.cos(yaw);
+
+        float moveAmount = WALK_SPEED * dt;
+
+        float dx = (-sin * forward + cos * strafe) * moveAmount;
+        float dz = (-cos * forward - sin * strafe) * moveAmount;
+
+        if (isWalkable(x + dx, z)) x += dx;
+        if (isWalkable(x, z + dz)) z += dz;
+    }
+
+    Transform3D yawT = new Transform3D();
+    yawT.rotY(yaw);
+
+    Transform3D pitchT = new Transform3D();
+    pitchT.rotX(pitch);
+
+    yawT.mul(pitchT);
+    yawT.setTranslation(new Vector3f(x, PLAYER_EYE_Y, z));
+    viewTG.setTransform(yawT);
+}
 
         private void clampPitch() {
             float limit = (float) Math.toRadians(80);
-            if (pitch > limit)
-                pitch = limit;
-            if (pitch < -limit)
-                pitch = -limit;
+            if (pitch > limit) pitch = limit;
+            if (pitch < -limit) pitch = -limit;
         }
 
         private void checkKeyPickups() {
             for (int i = 0; i < KEY_POSITIONS.length; i++) {
-                if (keyTaken[i])
-                    continue;
+                if (!keySpawned[i] || keyTaken[i]) continue;
                 float dx = x - KEY_POSITIONS[i].x, dz = z - KEY_POSITIONS[i].z;
-                if (dx * dx + dz * dz < 0.85f * 0.85f)
-                    collectKey(i);
+                if (dx * dx + dz * dz < 0.85f * 0.85f) collectKey(i);
             }
         }
 
@@ -1175,40 +1474,53 @@ fp.addChild(translated(0f, -0.18f, -0.50f,
         }
 
         public void keyPressed(KeyEvent e) {
-            if (e.getKeyCode() < keys.length)
-                keys[e.getKeyCode()] = true;
+            int code = e.getKeyCode();
+            if (code >= 0 && code < keys.length) keys[code] = true;
+
+            boolean nearBoard = !puzzleSolved[0] && nearPuzzleBoard(x, z);
+
+            // SHIFT  →  cycle cursor downward through answers (wraps bottom back to top)
+            if (nearBoard && code == KeyEvent.VK_SHIFT) {
+                puzzle1CursorPos = (puzzle1CursorPos + 1) % 4;
+                if (puzzle1PaperShape != null)
+                    puzzle1PaperShape.setAppearance(puzzlePaperAppearance(puzzle1LastWrong, puzzle1CursorPos));
+                return;
+            }
+
+            // E  →  confirm quiz answer OR interact with stray chair
+            if (code == KeyEvent.VK_E) {
+                if (nearBoard) {
+                    selectPuzzle1Answer(puzzle1CursorPos);
+                } else if (hoveringStrayChair) {
+                    solvePuzzle2();
+                }
+            }
         }
 
         public void keyReleased(KeyEvent e) {
-            if (e.getKeyCode() < keys.length)
-                keys[e.getKeyCode()] = false;
+            int code = e.getKeyCode();
+            if (code >= 0 && code < keys.length) keys[code] = false;
         }
 
-        public void keyTyped(KeyEvent e) {
-        }
+        public void keyTyped(KeyEvent e) {}
 
-        public void mouseDragged(MouseEvent e) {
-            mouseMoved(e);
-        }
+        // MouseListener — track button state so robot warp is suppressed during clicks
+        public void mousePressed(MouseEvent e)  { mouseButtonHeld = true;  }
+        public void mouseReleased(MouseEvent e) { mouseButtonHeld = false; }
+        public void mouseClicked(MouseEvent e)  {}
+        public void mouseEntered(MouseEvent e)  {}
+        public void mouseExited(MouseEvent e)   {}
+
+        public void mouseDragged(MouseEvent e) { mouseMoved(e); }
 
         public void mouseMoved(MouseEvent e) {
-            if (!canvas.hasFocus())
-                canvas.requestFocusInWindow();
-            if (!robotReady || firstWarp || !canvas.isShowing())
-                return;
-
-            // Delta from canvas centre — the Robot re-centres every frame so this
-            // is always a small movement offset rather than an absolute position.
+            if (!canvas.hasFocus()) canvas.requestFocusInWindow();
+            if (!robotReady || firstWarp || !canvas.isShowing()) return;
             int cx = canvas.getWidth() / 2;
             int cy = canvas.getHeight() / 2;
             int dx = e.getX() - cx;
             int dy = e.getY() - cy;
-
-            // Ignore the warp-back event itself (delta would be ~0,0 anyway but
-            // guard against edge cases where the OS delays the warp)
-            if (dx == 0 && dy == 0)
-                return;
-
+            if (dx == 0 && dy == 0) return;
             yaw -= dx * MOUSE_SENS;
             pitch -= dy * MOUSE_SENS;
             clampPitch();
@@ -1221,12 +1533,8 @@ fp.addChild(translated(0f, -0.18f, -0.50f,
     private void addTriN(ArrayList<float[]> vv, ArrayList<float[]> nn,
             float nx, float ny, float nz, float[] a, float[] b, float[] c) {
         float[] n = { nx, ny, nz };
-        vv.add(a);
-        vv.add(b);
-        vv.add(c);
-        nn.add(n);
-        nn.add(n);
-        nn.add(n);
+        vv.add(a); vv.add(b); vv.add(c);
+        nn.add(n); nn.add(n); nn.add(n);
     }
 
     private void addQuadN(ArrayList<float[]> vv, ArrayList<float[]> nn,
@@ -1242,12 +1550,8 @@ fp.addChild(translated(0f, -0.18f, -0.50f,
         float[] vc = new float[cnt * 3], nc = new float[cnt * 3];
         for (int i = 0; i < cnt; i++) {
             float[] v = vv.get(i), n = nn.get(i);
-            vc[i * 3] = v[0];
-            vc[i * 3 + 1] = v[1];
-            vc[i * 3 + 2] = v[2];
-            nc[i * 3] = n[0];
-            nc[i * 3 + 1] = n[1];
-            nc[i * 3 + 2] = n[2];
+            vc[i * 3] = v[0]; vc[i * 3 + 1] = v[1]; vc[i * 3 + 2] = v[2];
+            nc[i * 3] = n[0]; nc[i * 3 + 1] = n[1]; nc[i * 3 + 2] = n[2];
         }
         geo.setCoordinates(0, vc);
         geo.setNormals(0, nc);
@@ -1299,12 +1603,8 @@ fp.addChild(translated(0f, -0.18f, -0.50f,
             n.normalize();
             for (int j = 0; j < 3; j++) {
                 int k = (i + j) * 3;
-                co[k] = verts[i + j][0];
-                co[k + 1] = verts[i + j][1];
-                co[k + 2] = verts[i + j][2];
-                no[k] = n.x;
-                no[k + 1] = n.y;
-                no[k + 2] = n.z;
+                co[k] = verts[i + j][0]; co[k + 1] = verts[i + j][1]; co[k + 2] = verts[i + j][2];
+                no[k] = n.x; no[k + 1] = n.y; no[k + 2] = n.z;
             }
         }
         geo.setCoordinates(0, co);
@@ -1313,6 +1613,183 @@ fp.addChild(translated(0f, -0.18f, -0.50f,
     }
 
     // ── material helpers ──────────────────────────────────────────────────────
+    // chosenIndex: -1 = no guess, 0/2/3 = last wrong guess, 1 = correct (solved)
+    // cursorPos: 0-3 = cursor row (shown as ► while puzzle unsolved)
+    private Appearance puzzlePaperAppearance(int chosenIndex, int cursorPos) {
+        BufferedImage img = new BufferedImage(1024, 768, BufferedImage.TYPE_INT_ARGB);
+        Graphics2D g = img.createGraphics();
+        g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+
+        g.setColor(new Color(120, 78, 38));
+        g.fillRoundRect(28, 28, 968, 712, 60, 60);
+        g.setColor(new Color(221, 190, 122));
+        g.fillRoundRect(60, 60, 904, 648, 48, 48);
+        g.setColor(new Color(155, 100, 48));
+        g.setStroke(new BasicStroke(8f));
+        g.drawRoundRect(60, 60, 904, 648, 48, 48);
+
+        // Fixed-seed speckles so they don't re-randomise on every redraw
+        g.setColor(new Color(130, 84, 40, 55));
+        java.util.Random rng = new java.util.Random(42);
+        for (int i = 0; i < 450; i++) {
+            int x = 70 + (int) (rng.nextFloat() * 884);
+            int y = 70 + (int) (rng.nextFloat() * 628);
+            int r = 1 + (int) (rng.nextFloat() * 3);
+            g.fillOval(x, y, r, r);
+        }
+
+        g.setColor(new Color(55, 34, 18));
+        g.setFont(new Font("Serif", Font.BOLD, 42));
+        g.drawString("Puzzle I", 420, 125);
+
+        g.setFont(new Font("Serif", Font.BOLD, 30));
+        drawWrapped(g,
+                "Which of the following light types provides a uniform illumination in all directions and locations, generally serving as a simplified representation of the numerous weak interobject reflections in a real-world scene?",
+                115, 185, 800, 38);
+
+        String[] labels    = { "(a) Point Light", "(b) Ambient Light", "(c) Directional Light", "(d) Spotlight" };
+        int[]    labelYs   = { 455, 520, 585, 650 };
+        int      correctIdx = 1; // (b) Ambient Light
+
+        // Controls hint at bottom
+        if (chosenIndex < 0) {
+            g.setFont(new Font("Serif", Font.ITALIC, 24));
+            g.setColor(new Color(90, 58, 28, 180));
+            g.drawString("SHIFT to cycle  •  E to confirm", 315, 710);
+        }
+
+        boolean solved = (chosenIndex == correctIdx);
+
+        g.setFont(new Font("Serif", Font.BOLD, 34));
+        for (int i = 0; i < 4; i++) {
+            // ── mark the last wrong guess with ✗ (only while unsolved) ──────
+            if (!solved && chosenIndex >= 0 && i == chosenIndex) {
+                g.setColor(new Color(180, 30, 30));
+                g.setFont(new Font("Serif", Font.BOLD, 46));
+                g.drawString("\u2717", 110, labelYs[i]);
+                g.setFont(new Font("Serif", Font.BOLD, 34));
+            }
+            // ── mark the correct answer with ✓ when solved ──────────────────
+            if (solved && i == correctIdx) {
+                g.setColor(new Color(30, 120, 35));
+                g.setFont(new Font("Serif", Font.BOLD, 46));
+                g.drawString("\u2713", 110, labelYs[i]);
+                g.setFont(new Font("Serif", Font.BOLD, 34));
+            }
+            // ── cursor arrow while puzzle is unsolved ───────────────────────
+            if (!solved && i == cursorPos) {
+                g.setColor(new Color(180, 110, 20));
+                g.setFont(new Font("Serif", Font.BOLD, 40));
+                g.drawString("\u25ba", 112, labelYs[i]);
+                g.setFont(new Font("Serif", Font.BOLD, 34));
+                // Subtle row highlight
+                g.setColor(new Color(180, 130, 50, 60));
+                g.fillRoundRect(100, labelYs[i] - 36, 820, 44, 10, 10);
+            }
+            g.setColor(new Color(55, 34, 18));
+            g.drawString(labels[i], 170, labelYs[i]);
+        }
+
+        g.dispose();
+
+        Texture2D tex = new Texture2D(Texture.BASE_LEVEL, Texture.RGBA, 1024, 768);
+        tex.setImage(0, new ImageComponent2D(ImageComponent2D.FORMAT_RGBA, img));
+        tex.setEnable(true);
+
+        Appearance app = new Appearance();
+        app.setTexture(tex);
+        TextureAttributes ta = new TextureAttributes();
+        ta.setTextureMode(TextureAttributes.REPLACE);
+        app.setTextureAttributes(ta);
+        PolygonAttributes pa = new PolygonAttributes();
+        pa.setCullFace(PolygonAttributes.CULL_NONE);
+        app.setPolygonAttributes(pa);
+        return app;
+    }
+
+    private void drawWrapped(Graphics2D g, String text, int x, int y, int maxWidth, int lineHeight) {
+        FontMetrics fm = g.getFontMetrics();
+        String[] words = text.split(" ");
+        String line = "";
+        for (String word : words) {
+            String test = line.isEmpty() ? word : line + " " + word;
+            if (fm.stringWidth(test) > maxWidth) {
+                g.drawString(line, x, y);
+                y += lineHeight;
+                line = word;
+            } else {
+                line = test;
+            }
+        }
+        if (!line.isEmpty()) g.drawString(line, x, y);
+    }
+
+    private Appearance answerNormalAppearance() {
+        return invisiblePickAppearance();
+    }
+
+    private Appearance answerHighlightAppearance() {
+        Appearance app = new Appearance();
+
+        ColoringAttributes ca = new ColoringAttributes(
+                1.0f, 0.86f, 0.22f, ColoringAttributes.SHADE_FLAT);
+        app.setColoringAttributes(ca);
+
+        TransparencyAttributes tr = new TransparencyAttributes(
+                TransparencyAttributes.BLENDED, 0.45f);
+        app.setTransparencyAttributes(tr);
+
+        PolygonAttributes pa = new PolygonAttributes();
+        pa.setCullFace(PolygonAttributes.CULL_NONE);
+        app.setPolygonAttributes(pa);
+
+        RenderingAttributes ra = new RenderingAttributes();
+        ra.setDepthBufferWriteEnable(false);
+        ra.setDepthBufferEnable(true);
+        app.setRenderingAttributes(ra);
+
+        return app;
+    }
+
+    private Appearance invisiblePickAppearance() {
+        Appearance app = new Appearance();
+
+        ColoringAttributes ca = new ColoringAttributes(0f, 0f, 0f, ColoringAttributes.SHADE_FLAT);
+        app.setColoringAttributes(ca);
+
+        // 1.0f is often skipped entirely by the pick traversal — use 0.99f instead
+        TransparencyAttributes tr = new TransparencyAttributes(TransparencyAttributes.BLENDED, 0.99f);
+        app.setTransparencyAttributes(tr);
+
+        PolygonAttributes pa = new PolygonAttributes();
+        pa.setCullFace(PolygonAttributes.CULL_NONE);
+        app.setPolygonAttributes(pa);
+
+        RenderingAttributes ra = new RenderingAttributes();
+        ra.setDepthBufferWriteEnable(false);
+        ra.setDepthBufferEnable(true);
+        app.setRenderingAttributes(ra);
+
+        return app;
+    }
+
+    private GeometryArray texturedQuadGeo(float x1, float y1, float z1,
+            float x2, float y2, float z2, float[] n) {
+        QuadArray qa = new QuadArray(4,
+                GeometryArray.COORDINATES | GeometryArray.NORMALS | GeometryArray.TEXTURE_COORDINATE_2);
+        qa.setCoordinate(0, new Point3f(x1, y1, z1));
+        qa.setCoordinate(1, new Point3f(x2, y1, z1));
+        qa.setCoordinate(2, new Point3f(x2, y2, z2));
+        qa.setCoordinate(3, new Point3f(x1, y2, z2));
+        Vector3f normal = new Vector3f(n[0], n[1], n[2]);
+        for (int i = 0; i < 4; i++) qa.setNormal(i, normal);
+        qa.setTextureCoordinate(0, 0, new TexCoord2f(1f, 0f));
+        qa.setTextureCoordinate(0, 1, new TexCoord2f(0f, 0f));
+        qa.setTextureCoordinate(0, 2, new TexCoord2f(0f, 1f));
+        qa.setTextureCoordinate(0, 3, new TexCoord2f(1f, 1f));
+        return qa;
+    }
+
     private Appearance matEmissive(Color3f amb, Color3f diff, Color3f emis) {
         Appearance app = new Appearance();
         Material m = new Material();
@@ -1329,32 +1806,25 @@ fp.addChild(translated(0f, -0.18f, -0.50f,
         return app;
     }
 
-
     private Appearance textureAppearance(Color base, Color line, int size, boolean woodGrain) {
         BufferedImage img = new BufferedImage(size, size, BufferedImage.TYPE_INT_RGB);
         Graphics2D g = img.createGraphics();
         g.setColor(base);
         g.fillRect(0, 0, size, size);
         g.setColor(line);
-
         if (woodGrain) {
             for (int y = 0; y < size; y += 8) {
                 int wobble = (int) (Math.sin(y * 0.25) * 6);
                 g.drawLine(0, y, size, Math.max(0, Math.min(size - 1, y + wobble)));
             }
             g.setColor(base.darker());
-            for (int x = 0; x < size; x += 32) {
-                g.drawLine(x, 0, x, size);
-            }
+            for (int x = 0; x < size; x += 32) g.drawLine(x, 0, x, size);
         } else {
-            int brickH = 16;
-            int brickW = 32;
+            int brickH = 16, brickW = 32;
             for (int y = 0; y < size; y += brickH) {
                 g.drawLine(0, y, size, y);
                 int offset = ((y / brickH) % 2) * (brickW / 2);
-                for (int x = -offset; x < size; x += brickW) {
-                    g.drawLine(x, y, x, y + brickH);
-                }
+                for (int x = -offset; x < size; x += brickW) g.drawLine(x, y, x, y + brickH);
             }
         }
         g.dispose();
@@ -1368,71 +1838,48 @@ fp.addChild(translated(0f, -0.18f, -0.50f,
                 c(base.getRed() / 255f, base.getGreen() / 255f, base.getBlue() / 255f),
                 c(0.03f, 0.02f, 0.015f));
         app.setTexture(tex);
-
         TextureAttributes ta = new TextureAttributes();
         ta.setTextureMode(TextureAttributes.MODULATE);
         app.setTextureAttributes(ta);
-
-        // Lets custom geometry such as the curved wall receive 2D texture coordinates.
         TexCoordGeneration tcg = new TexCoordGeneration(
                 TexCoordGeneration.OBJECT_LINEAR, TexCoordGeneration.TEXTURE_COORDINATE_2);
         app.setTexCoordGeneration(tcg);
-
         return app;
     }
 
     private Appearance fireAppearance() {
-    Appearance app = new Appearance();
-
-    BufferedImage img = new BufferedImage(64, 64, BufferedImage.TYPE_INT_ARGB);
-    Graphics2D g = img.createGraphics();
-
-    for (int y = 0; y < 64; y++) {
-        float t = y / 63f;
-
-        int alpha = (int)(255 * (1.0f - t * 0.6f));
-        int red = 255;
-        int green = (int)(160 - t * 120);
-        int blue = 20;
-
-        g.setColor(new Color(red, green, blue, alpha));
-        g.drawLine(0, 63 - y, 64, 63 - y);
+        Appearance app = new Appearance();
+        BufferedImage img = new BufferedImage(64, 64, BufferedImage.TYPE_INT_ARGB);
+        Graphics2D g = img.createGraphics();
+        for (int y = 0; y < 64; y++) {
+            float t = y / 63f;
+            int alpha = (int)(255 * (1.0f - t * 0.6f));
+            int red = 255;
+            int green = (int)(160 - t * 120);
+            int blue = 20;
+            g.setColor(new Color(red, green, blue, alpha));
+            g.drawLine(0, 63 - y, 64, 63 - y);
+        }
+        g.dispose();
+        Texture2D tex = new Texture2D(Texture.BASE_LEVEL, Texture.RGBA, 64, 64);
+        tex.setImage(0, new ImageComponent2D(ImageComponent2D.FORMAT_RGBA, img));
+        tex.setEnable(true);
+        app.setTexture(tex);
+        TextureAttributes ta = new TextureAttributes();
+        ta.setTextureMode(TextureAttributes.MODULATE);
+        app.setTextureAttributes(ta);
+        Material m = new Material();
+        m.setLightingEnable(true);
+        m.setEmissiveColor(new Color3f(1.0f, 0.4f, 0.05f));
+        m.setDiffuseColor(new Color3f(1.0f, 0.6f, 0.1f));
+        app.setMaterial(m);
+        PolygonAttributes pa = new PolygonAttributes();
+        pa.setCullFace(PolygonAttributes.CULL_NONE);
+        app.setPolygonAttributes(pa);
+        TransparencyAttributes tr = new TransparencyAttributes(TransparencyAttributes.BLENDED, 0.2f);
+        app.setTransparencyAttributes(tr);
+        return app;
     }
-
-    g.dispose();
-
-    Texture2D tex = new Texture2D(Texture.BASE_LEVEL, Texture.RGBA, 64, 64);
-    tex.setImage(0, new ImageComponent2D(ImageComponent2D.FORMAT_RGBA, img));
-    tex.setEnable(true);
-
-    app.setTexture(tex);
-
-    TextureAttributes ta = new TextureAttributes();
-    ta.setTextureMode(TextureAttributes.MODULATE);
-    app.setTextureAttributes(ta);
-
-    Material m = new Material();
-    m.setLightingEnable(true);
-
-    // 🔥 VERY IMPORTANT — strong emissive
-    m.setEmissiveColor(new Color3f(1.0f, 0.4f, 0.05f));
-    m.setDiffuseColor(new Color3f(1.0f, 0.6f, 0.1f));
-
-    app.setMaterial(m);
-
-    // ✅ MUST disable culling so fire shows both sides
-    PolygonAttributes pa = new PolygonAttributes();
-    pa.setCullFace(PolygonAttributes.CULL_NONE);
-    app.setPolygonAttributes(pa);
-
-    // 🔥 transparency but not too much
-    TransparencyAttributes tr =
-        new TransparencyAttributes(TransparencyAttributes.BLENDED, 0.2f);
-    app.setTransparencyAttributes(tr);
-    
-    return app;
-}
-    
 
     private Appearance gemMat() {
         Appearance app = new Appearance();
@@ -1451,21 +1898,10 @@ fp.addChild(translated(0f, -0.18f, -0.50f,
     }
 
     // ── tiny helpers ──────────────────────────────────────────────────────────
-    private Color3f c(float r, float g, float b) {
-        return new Color3f(r, g, b);
-    }
-
-    private float[] p(float x, float y, float z) {
-        return new float[] { x, y, z };
-    }
-
-    private Vector3f vf(float[] a) {
-        return new Vector3f(a[0], a[1], a[2]);
-    }
-
-    private BoundingSphere wb() {
-        return new BoundingSphere(new Point3d(), 60);
-    }
+    private Color3f c(float r, float g, float b) { return new Color3f(r, g, b); }
+    private float[] p(float x, float y, float z) { return new float[] { x, y, z }; }
+    private Vector3f vf(float[] a) { return new Vector3f(a[0], a[1], a[2]); }
+    private BoundingSphere wb() { return new BoundingSphere(new Point3d(), 60); }
 
     private TransformGroup translated(float x, float y, float z, Node child) {
         Transform3D t = new Transform3D();
