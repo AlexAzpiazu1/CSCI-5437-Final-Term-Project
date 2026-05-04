@@ -77,15 +77,15 @@ public class RoundtableHold extends JFrame {
     // Fire switch state
     private final TransformGroup[] fireDiamondTGs = new TransformGroup[3];
     private final PointLight[] fireDiamondLights = new PointLight[3];
-    private boolean fireOn = true;
+    private boolean fireOn = false; // starts OFF — click switch to reveal the key
     private TransformGroup switchLeverTG;
     private TransformGroup fireplaceKeyTG; // rises from floor when fire is switched on
     private boolean fireplaceKeyTaken = false;
 
     private static final Point3f[] KEY_POSITIONS = new Point3f[] {
-            new Point3f(5.5f, FLOOR_Y + 0.45f, 4.8f),
-            new Point3f(-5.8f, FLOOR_Y + 0.45f, -3.8f),
-            new Point3f(2.2f, FLOOR_Y + 0.45f, -9.2f)
+            new Point3f(-3.5f, FLOOR_Y + 0.45f, 6.5f), // south area
+            new Point3f(-5.8f, FLOOR_Y + 0.45f, -3.8f), // west area
+            new Point3f(2.2f, FLOOR_Y + 0.45f, -9.2f) // north hallway
     };
     // The fireplace key starts underground and rises when the fire is switched on
     private static final Point3f FIRE_KEY_POS = new Point3f(ROOM_R - 2.5f, FLOOR_Y + 0.45f, 0.0f);
@@ -197,6 +197,7 @@ public class RoundtableHold extends JFrame {
                     new Point3f(ROOM_R - 1.7f, FLOOR_Y + 0.60f, fdX[fi]),
                     new Point3f(0.05f, 0.18f, 0.04f));
             fl.setCapability(PointLight.ALLOW_STATE_WRITE);
+            fl.setEnable(false); // fire starts off
             fl.setInfluencingBounds(wb());
             root.addChild(fl);
             fireDiamondLights[fi] = fl;
@@ -706,8 +707,9 @@ public class RoundtableHold extends JFrame {
             TransformGroup fScaleTG = new TransformGroup(fScale);
             fScaleTG.addChild(fireGem);
 
+            // Start hidden (behind wall) since fireOn = false initially
             Transform3D fPos = new Transform3D();
-            fPos.setTranslation(new Vector3f(fireX[fi], -0.45f, -0.05f));
+            fPos.setTranslation(new Vector3f(fireX[fi], -0.45f, 5.0f));
             fireDiamondTGs[fi] = new TransformGroup(fPos);
             fireDiamondTGs[fi].setCapability(TransformGroup.ALLOW_TRANSFORM_WRITE);
             fireDiamondTGs[fi].addChild(fScaleTG);
@@ -760,33 +762,62 @@ public class RoundtableHold extends JFrame {
     private TransformGroup buildFireSign() {
         TransformGroup group = new TransformGroup();
 
-        // Sign board — pulled 1.2 units from the wall into the room so it clears the
-        // pillar.
-        float signX = ROOM_R - 1.4f;
+        // Sign board sits flush against the front face of the fireplace surround.
+        // Fireplace surround front face (room-facing side) in world space:
+        // fp origin = (ROOM_R-0.22, FLOOR_Y+1.05, 0), rotY(PI/2).
+        // Pillar local Z half-extent = 0.65 → world X offset = -(localZ) = -0.65
+        // So surround face worldX ≈ (ROOM_R-0.22) - 0.65 = ROOM_R - 0.87 ≈ 13.13
+        // Sign is a flat board mounted on that face, so worldX = ROOM_R - 0.87 - 0.06
+        // (half board depth)
+        // Sign faces INTO the room, normal pointing in -X direction.
+        // We do NOT rotate the board: the Box default has its face along Z, so we
+        // just translate and the face will be parallel to the YZ plane, facing ±X.
+        float signX = ROOM_R - 0.7f; // further back from pillar
         float signY = FLOOR_Y + 2.85f;
         float signZ = 0f;
 
         Appearance boardApp = matEmissive(c(0.25f, 0.15f, 0.07f), c(0.55f, 0.35f, 0.15f), c(0.06f, 0.03f, 0.01f));
-        Appearance textApp = matEmissive(c(0.85f, 0.78f, 0.55f), c(1.0f, 0.92f, 0.70f), c(0.30f, 0.25f, 0.10f));
-
         int flags = com.sun.j3d.utils.geometry.Primitive.GENERATE_NORMALS;
 
-        // Compose: first rotate around Y so the sign faces into the room (-X
-        // direction),
-        // then translate to world position. Use mul() so both are applied.
-        Transform3D boardRot = new Transform3D();
-        boardRot.rotY(Math.PI / 2.0);
-        Transform3D boardTrans = new Transform3D();
-        boardTrans.setTranslation(new Vector3f(signX, signY, signZ));
-        boardTrans.mul(boardRot);
-        TransformGroup boardTG = new TransformGroup(boardTrans);
-        boardTG.addChild(new com.sun.j3d.utils.geometry.Box(0.85f, 0.28f, 0.06f, flags, boardApp));
+        Transform3D boardT = new Transform3D();
+        boardT.setTranslation(new Vector3f(signX, signY, signZ));
+        TransformGroup boardTG = new TransformGroup(boardT);
+        boardTG.addChild(new com.sun.j3d.utils.geometry.Box(0.06f, 0.28f, 0.85f, flags, boardApp));
 
-        TransformGroup textTG = new TransformGroup();
-        Transform3D textPos = new Transform3D();
-        textPos.setTranslation(new Vector3f(0f, 0f, 0.065f));
-        textTG.setTransform(textPos);
-        textTG.addChild(new com.sun.j3d.utils.geometry.Box(0.75f, 0.18f, 0.015f, flags, textApp));
+        // Text2D renders in local XY plane, origin at bottom-left, extending in +X.
+        // rectScaleFactor scales pixel coords to world units: worldWidth = pixelWidth *
+        // factor.
+        // Font 24pt "Turn the light on!" ≈ 225px wide → 225 * 0.004 = 0.90 units
+        // halfWidth = 0.45 → pre-rotation shift centres text on sign
+        float halfWidth = 0.45f;
+        float halfHeight = 0.04f;
+
+        com.sun.j3d.utils.geometry.Text2D text = new com.sun.j3d.utils.geometry.Text2D(
+                "Turn the light on!",
+                new Color3f(1.0f, 0.92f, 0.60f),
+                "SansSerif", 24, java.awt.Font.BOLD);
+        text.setRectangleScaleFactor(0.004f);
+
+        // Correct composition order (applied right-to-left):
+        // 1. tCentre: shift text +halfWidth in local X so its centre lands at local
+        // origin
+        // 2. tRot: rotY(-PI/2) — text now faces into room, local +X → world -Z
+        // 3. tFront: move just in front of board face along world -X
+        Transform3D tCentre = new Transform3D();
+        tCentre.setTranslation(new Vector3f(-halfWidth, -halfHeight, 0f));
+
+        Transform3D tRot = new Transform3D();
+        tRot.rotY(-Math.PI / 2.0);
+
+        Transform3D tFront = new Transform3D();
+        tFront.setTranslation(new Vector3f(-0.08f, 0f, 0f));
+
+        Transform3D combined = new Transform3D(tFront);
+        combined.mul(tRot);
+        combined.mul(tCentre);
+
+        TransformGroup textTG = new TransformGroup(combined);
+        textTG.addChild(text);
         boardTG.addChild(textTG);
 
         group.addChild(boardTG);
@@ -817,11 +848,11 @@ public class RoundtableHold extends JFrame {
         TransformGroup plateTG = new TransformGroup(plateT);
         plateTG.addChild(new com.sun.j3d.utils.geometry.Box(0.18f, 0.30f, 0.04f, flags, plateApp));
 
-        // Lever — small box, half-embedded in plate, tilted 30° (upward = on)
+        // Lever — starts tilted down (+30°) since fire begins off
         switchLeverTG = new TransformGroup();
         switchLeverTG.setCapability(TransformGroup.ALLOW_TRANSFORM_WRITE);
         Transform3D leverRot = new Transform3D();
-        leverRot.rotX(Math.toRadians(-30)); // tilted up = "on"
+        leverRot.rotX(Math.toRadians(30)); // down = off
         switchLeverTG.setTransform(leverRot);
         switchLeverTG.addChild(new com.sun.j3d.utils.geometry.Box(0.06f, 0.14f, 0.07f, flags, leverApp));
         plateTG.addChild(switchLeverTG);
@@ -866,39 +897,42 @@ public class RoundtableHold extends JFrame {
             fireDiamondLights[fi].setEnable(fireOn);
         }
 
-        // Tilt lever
+        // Tilt lever: up (-30°) = on, down (+30°) = off
         Transform3D leverRot = new Transform3D();
         leverRot.rotX(Math.toRadians(fireOn ? -30 : 30));
         switchLeverTG.setTransform(leverRot);
 
-        // Animate the fireplace key rising from underground when fire is turned on
-        if (fireOn) {
-            new Thread(() -> {
-                float startY = FLOOR_Y - 1.5f;
-                float endY = FIRE_KEY_POS.y;
-                long duration = 1200;
-                long start = System.currentTimeMillis();
-                while (true) {
-                    long elapsed = System.currentTimeMillis() - start;
-                    float t = Math.min(elapsed / (float) duration, 1.0f);
-                    float ease = 1f - (1f - t) * (1f - t);
-                    float curY = startY + (endY - startY) * ease;
-                    Transform3D pos = new Transform3D();
-                    pos.setTranslation(new Vector3f(FIRE_KEY_POS.x, curY, FIRE_KEY_POS.z));
-                    fireplaceKeyTG.setTransform(pos);
-                    if (t >= 1.0f)
-                        break;
-                    try {
-                        Thread.sleep(16);
-                    } catch (InterruptedException ignored) {
+        // Only animate the key if it hasn't been collected yet
+        if (!fireplaceKeyTaken) {
+            if (fireOn) {
+                // Rise from underground
+                new Thread(() -> {
+                    float startY = FLOOR_Y - 1.5f;
+                    float endY = FIRE_KEY_POS.y;
+                    long duration = 1200;
+                    long start = System.currentTimeMillis();
+                    while (true) {
+                        long elapsed = System.currentTimeMillis() - start;
+                        float t = Math.min(elapsed / (float) duration, 1.0f);
+                        float ease = 1f - (1f - t) * (1f - t);
+                        float curY = startY + (endY - startY) * ease;
+                        Transform3D pos = new Transform3D();
+                        pos.setTranslation(new Vector3f(FIRE_KEY_POS.x, curY, FIRE_KEY_POS.z));
+                        fireplaceKeyTG.setTransform(pos);
+                        if (t >= 1.0f)
+                            break;
+                        try {
+                            Thread.sleep(16);
+                        } catch (InterruptedException ignored) {
+                        }
                     }
-                }
-            }, "key-rise").start();
-        } else {
-            // Hide key back below floor
-            Transform3D pos = new Transform3D();
-            pos.setTranslation(new Vector3f(FIRE_KEY_POS.x, FLOOR_Y - 1.5f, FIRE_KEY_POS.z));
-            fireplaceKeyTG.setTransform(pos);
+                }, "key-rise").start();
+            } else {
+                // Sink back below floor instantly
+                Transform3D pos = new Transform3D();
+                pos.setTranslation(new Vector3f(FIRE_KEY_POS.x, FLOOR_Y - 1.5f, FIRE_KEY_POS.z));
+                fireplaceKeyTG.setTransform(pos);
+            }
         }
     }
 
