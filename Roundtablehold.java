@@ -113,6 +113,16 @@ public class RoundtableHold extends JFrame {
     private TransformGroup doorTG;
     private int collectedKeys = 0;
 
+    // ── fireplace switch / key ────────────────────────────────────────────────
+    private final TransformGroup[] fireDiamondTGs    = new TransformGroup[3];
+    private final PointLight[]     fireDiamondLights = new PointLight[3];
+    private boolean fireOn = false;          // starts OFF — click switch to reveal the key
+    private TransformGroup switchLeverTG;
+    private TransformGroup fireplaceKeyTG;   // rises from floor when fire is switched on
+    private boolean fireplaceKeyTaken = false;
+    private static final Point3f FIRE_KEY_POS =
+            new Point3f(ROOM_R - 2.5f, FLOOR_Y + 0.45f, 0.0f);
+
     private static final Point3f[] KEY_POSITIONS = new Point3f[] {
             new Point3f(5.5f, FLOOR_Y + 0.45f, 4.8f),
             new Point3f(-5.8f, FLOOR_Y + 0.45f, -3.8f),
@@ -216,9 +226,12 @@ public class RoundtableHold extends JFrame {
         root.addChild(buildChairs());
         root.addChild(buildStrayChairHitbox());
         root.addChild(buildFireplace());
+        root.addChild(buildFireSign());
+        root.addChild(buildLightSwitch());
         root.addChild(buildGem());
         root.addChild(buildPuzzleBoards());
         root.addChild(buildKeys());
+        root.addChild(buildFireplaceKey());
         root.addChild(buildExitDoor());
 
         FirstPersonController controller = new FirstPersonController(vpTG, canvas, root);
@@ -270,12 +283,22 @@ public class RoundtableHold extends JFrame {
             root.addChild(dl);
         }
 
-        Color3f df = new Color3f(0.32f, 0.28f, 0.36f);
-        float[][] dirs = { { 0, -1, 0 }, { 0, 1, 0 }, { 1, 0, 0 }, { -1, 0, 0 }, { 0, 0, 1 }, { 0, 0, -1 } };
-        for (float[] d : dirs) {
-            DirectionalLight dl = new DirectionalLight(df, new Vector3f(d[0], d[1], d[2]));
-            dl.setInfluencingBounds(wb());
-            root.addChild(dl);
+        float[] fdX = { -0.38f, 0.00f, 0.38f };
+        Color3f[] fdCol = {
+                new Color3f(0.95f, 0.08f, 0.02f),
+                new Color3f(1.00f, 0.45f, 0.03f),
+                new Color3f(1.00f, 0.82f, 0.10f),
+        };
+        for (int fi = 0; fi < 3; fi++) {
+            PointLight fl = new PointLight(
+                    fdCol[fi],
+                    new Point3f(ROOM_R - 1.7f, FLOOR_Y + 0.60f, fdX[fi]),
+                    new Point3f(0.05f, 0.18f, 0.04f));
+            fl.setCapability(PointLight.ALLOW_STATE_WRITE);
+            fl.setEnable(false); // fire starts off
+            fl.setInfluencingBounds(wb());
+            root.addChild(fl);
+            fireDiamondLights[fi] = fl;
         }
     }
 
@@ -808,47 +831,48 @@ public class RoundtableHold extends JFrame {
 
         Appearance stone = textureAppearance(new Color(70, 65, 60), new Color(125, 115, 105), 64, false);
         Appearance dark = matEmissive(c(0.02f, 0.015f, 0.01f), c(0.05f, 0.035f, 0.02f), c(0.01f, 0.005f, 0.002f));
-        Appearance fireApp = fireAppearance();
         Appearance chimneyApp = textureAppearance(new Color(60, 58, 55), new Color(115, 110, 105), 64, false);
+        Appearance logApp = textureAppearance(new Color(78, 42, 19), new Color(135, 82, 36), 64, true);
 
         int flags = com.sun.j3d.utils.geometry.Primitive.GENERATE_NORMALS
                 | com.sun.j3d.utils.geometry.Primitive.GENERATE_TEXTURE_COORDS;
+        int cylFlags = Cylinder.GENERATE_NORMALS | Cylinder.GENERATE_TEXTURE_COORDS;
 
         Transform3D base = new Transform3D();
         base.setTranslation(new Vector3f(ROOM_R - 0.22f, FLOOR_Y + 1.05f, 0f));
         Transform3D rot = new Transform3D();
         rot.rotY(Math.PI / 2.0);
         base.mul(rot);
-
         TransformGroup fp = new TransformGroup(base);
 
+        // ── back wall of fireplace opening ────────────────────────────────────
         fp.addChild(translated(0f, 0f, -0.06f,
                 new com.sun.j3d.utils.geometry.Box(0.85f, 0.75f, 0.08f, flags, dark)));
 
+        // ── side pillars — deeper into the room (Z half-extent 0.65) ──────────
         fp.addChild(translated(-1.05f, 0f, 0f,
-                new com.sun.j3d.utils.geometry.Box(0.22f, 0.95f, 0.25f, flags, stone)));
+                new com.sun.j3d.utils.geometry.Box(0.22f, 0.95f, 0.65f, flags, stone)));
         fp.addChild(translated(1.05f, 0f, 0f,
-                new com.sun.j3d.utils.geometry.Box(0.22f, 0.95f, 0.25f, flags, stone)));
+                new com.sun.j3d.utils.geometry.Box(0.22f, 0.95f, 0.65f, flags, stone)));
 
+        // ── mantle — wider and deeper ──────────────────────────────────────────
         fp.addChild(translated(0f, 0.95f, 0f,
-                new com.sun.j3d.utils.geometry.Box(1.35f, 0.22f, 0.28f, flags, stone)));
-        fp.addChild(translated(0f, -0.78f, 0.12f,
-                new com.sun.j3d.utils.geometry.Box(1.45f, 0.18f, 0.55f, flags, stone)));
+                new com.sun.j3d.utils.geometry.Box(1.40f, 0.22f, 0.68f, flags, stone)));
 
-        Appearance logApp = textureAppearance(new Color(78, 42, 19), new Color(135, 82, 36), 64, true);
-        Cylinder log1 = new Cylinder(0.06f, 0.85f,
-                Cylinder.GENERATE_NORMALS | Cylinder.GENERATE_TEXTURE_COORDS, 16, 1, logApp);
+        // ── hearth — deeper ───────────────────────────────────────────────────
+        fp.addChild(translated(0f, -0.78f, 0.12f,
+                new com.sun.j3d.utils.geometry.Box(1.45f, 0.18f, 0.85f, flags, stone)));
+
+        // ── logs ──────────────────────────────────────────────────────────────
         Transform3D log1Rot = new Transform3D();
         log1Rot.rotZ(Math.PI / 2.0);
         Transform3D log1Pos = new Transform3D();
         log1Pos.setTranslation(new Vector3f(0f, -0.58f, 0.17f));
         log1Pos.mul(log1Rot);
         TransformGroup log1TG = new TransformGroup(log1Pos);
-        log1TG.addChild(log1);
+        log1TG.addChild(new Cylinder(0.06f, 0.85f, cylFlags, 16, 1, logApp));
         fp.addChild(log1TG);
 
-        Cylinder log2 = new Cylinder(0.06f, 0.75f,
-                Cylinder.GENERATE_NORMALS | Cylinder.GENERATE_TEXTURE_COORDS, 16, 1, logApp);
         Transform3D log2Rot = new Transform3D();
         log2Rot.rotZ(Math.PI / 2.0);
         Transform3D log2Yaw = new Transform3D();
@@ -858,84 +882,60 @@ public class RoundtableHold extends JFrame {
         log2Pos.mul(log2Yaw);
         log2Pos.mul(log2Rot);
         TransformGroup log2TG = new TransformGroup(log2Pos);
-        log2TG.addChild(log2);
+        log2TG.addChild(new Cylinder(0.06f, 0.75f, cylFlags, 16, 1, logApp));
         fp.addChild(log2TG);
 
-        fp.addChild(translated(-0.22f, -0.28f, -0.10f,
-                new com.sun.j3d.utils.geometry.Cone(
-                        0.22f, 0.85f,
-                        com.sun.j3d.utils.geometry.Primitive.GENERATE_NORMALS,
-                        24, 1,
-                        fireSolidAppearance(new Color3f(1.0f, 0.18f, 0.02f))
-                )));
+        // ── fire diamonds — three glowing octahedra (hidden until switch is on) ─
+        float[] fireX = { -0.38f, 0.00f, 0.38f };
+        Color3f[] fireCols = {
+                new Color3f(0.95f, 0.08f, 0.02f), // red
+                new Color3f(1.00f, 0.45f, 0.03f), // orange
+                new Color3f(1.00f, 0.82f, 0.10f), // yellow
+        };
+        for (int fi = 0; fi < 3; fi++) {
+            Shape3D fireGem = new Shape3D(octahedron(0.32f), fireGlowMat(fireCols[fi]));
+            Transform3D fScale = new Transform3D();
+            fScale.setScale(new Vector3d(1.0, 2.8, 1.0));
+            TransformGroup fScaleTG = new TransformGroup(fScale);
+            fScaleTG.addChild(fireGem);
 
-        fp.addChild(translated(0.0f, -0.20f, -0.14f,
-                new com.sun.j3d.utils.geometry.Cone(
-                        0.28f, 1.05f,
-                        com.sun.j3d.utils.geometry.Primitive.GENERATE_NORMALS,
-                        24, 1,
-                        fireSolidAppearance(new Color3f(1.0f, 0.55f, 0.05f))
-                )));
+            // Start hidden (pushed behind wall) since fireOn = false initially
+            Transform3D fPos = new Transform3D();
+            fPos.setTranslation(new Vector3f(fireX[fi], -0.45f, 5.0f));
+            fireDiamondTGs[fi] = new TransformGroup(fPos);
+            fireDiamondTGs[fi].setCapability(TransformGroup.ALLOW_TRANSFORM_WRITE);
+            fireDiamondTGs[fi].addChild(fScaleTG);
+            fp.addChild(fireDiamondTGs[fi]);
+        }
 
-        fp.addChild(translated(0.22f, -0.32f, -0.10f,
-                new com.sun.j3d.utils.geometry.Cone(
-                        0.18f, 0.75f,
-                        com.sun.j3d.utils.geometry.Primitive.GENERATE_NORMALS,
-                        24, 1,
-                        fireSolidAppearance(new Color3f(1.0f, 0.85f, 0.15f))
-                )));
-
-        fp.addChild(translated(0f, 2.25f, -0.04f,
-                new com.sun.j3d.utils.geometry.Box(0.45f, 1.35f, 0.38f, flags, chimneyApp)));
-
-        fp.addChild(translated(0f, 3.60f, -0.04f,
+        // ── chimney ───────────────────────────────────────────────────────────
+        fp.addChild(translated(0f, 3.17f, -0.04f,
+                new com.sun.j3d.utils.geometry.Box(0.45f, 2.00f, 0.38f, flags, chimneyApp)));
+        fp.addChild(translated(0f, 5.30f, -0.04f,
                 new com.sun.j3d.utils.geometry.Box(0.60f, 0.18f, 0.50f, flags, chimneyApp)));
 
         group.addChild(fp);
 
+        // ── flickering fire lights (always present; diamonds hidden until switch on) ─
         PointLight fireLight = new PointLight(
                 new Color3f(1.0f, 0.5f, 0.1f),
                 new Point3f(ROOM_R - 1.0f, FLOOR_Y + 1.1f, 0f),
-                new Point3f(0.1f, 0.05f, 0.01f)
-        );
+                new Point3f(0.1f, 0.05f, 0.01f));
         fireLight.setCapability(PointLight.ALLOW_COLOR_WRITE);
         fireLight.setCapability(PointLight.ALLOW_ATTENUATION_WRITE);
+        fireLight.setEnable(false);
         fireLight.setInfluencingBounds(wb());
         group.addChild(fireLight);
 
         PointLight upperFireGlow = new PointLight(
                 new Color3f(1.0f, 0.72f, 0.22f),
                 new Point3f(ROOM_R - 1.0f, FLOOR_Y + 1.9f, 0f),
-                new Point3f(0.05f, 0.02f, 0.005f)
-        );
+                new Point3f(0.05f, 0.02f, 0.005f));
         upperFireGlow.setCapability(PointLight.ALLOW_COLOR_WRITE);
         upperFireGlow.setCapability(PointLight.ALLOW_ATTENUATION_WRITE);
+        upperFireGlow.setEnable(false);
         upperFireGlow.setInfluencingBounds(wb());
         group.addChild(upperFireGlow);
-
-        Appearance glowApp = new Appearance();
-        glowApp.setColoringAttributes(new ColoringAttributes(
-                1.0f, 0.45f, 0.05f,
-                ColoringAttributes.SHADE_GOURAUD
-        ));
-        glowApp.setTransparencyAttributes(new TransparencyAttributes(
-                TransparencyAttributes.BLENDED,
-                0.65f
-        ));
-        PolygonAttributes glowPA = new PolygonAttributes();
-        glowPA.setCullFace(PolygonAttributes.CULL_NONE);
-        glowApp.setPolygonAttributes(glowPA);
-        RenderingAttributes glowRA = new RenderingAttributes();
-        glowRA.setDepthBufferWriteEnable(false);
-        glowApp.setRenderingAttributes(glowRA);
-
-        fp.addChild(translated(0f, -0.18f, -0.50f,
-                new com.sun.j3d.utils.geometry.Sphere(
-                        0.62f,
-                        com.sun.j3d.utils.geometry.Primitive.GENERATE_NORMALS,
-                        32,
-                        glowApp
-                )));
 
         FireFlickerBehavior flicker = new FireFlickerBehavior(fireLight, upperFireGlow);
         flicker.setSchedulingBounds(wb());
@@ -944,20 +944,169 @@ public class RoundtableHold extends JFrame {
         return group;
     }
 
-    private Appearance fireSolidAppearance(Color3f color) {
+    /**
+     * Fully opaque emissive material for fire diamonds.
+     */
+    private Appearance fireGlowMat(Color3f color) {
         Appearance app = new Appearance();
         Material m = new Material();
-        m.setLightingEnable(true);
+        m.setEmissiveColor(color);
         m.setAmbientColor(color);
         m.setDiffuseColor(color);
-        m.setEmissiveColor(color);
-        m.setSpecularColor(new Color3f(1.0f, 0.8f, 0.3f));
-        m.setShininess(64f);
+        m.setSpecularColor(new Color3f(1.0f, 0.9f, 0.4f));
+        m.setShininess(96f);
+        m.setLightingEnable(true);
         app.setMaterial(m);
         PolygonAttributes pa = new PolygonAttributes();
         pa.setCullFace(PolygonAttributes.CULL_NONE);
         app.setPolygonAttributes(pa);
         return app;
+    }
+
+    // =========================================================================
+    // FIREPLACE SIGN
+    // =========================================================================
+    private TransformGroup buildFireSign() {
+        TransformGroup group = new TransformGroup();
+
+        float signX = ROOM_R - 0.7f;
+        float signY = FLOOR_Y + 2.85f;
+        float signZ = 0f;
+
+        Appearance boardApp = matEmissive(c(0.25f, 0.15f, 0.07f), c(0.55f, 0.35f, 0.15f), c(0.06f, 0.03f, 0.01f));
+        int flags = com.sun.j3d.utils.geometry.Primitive.GENERATE_NORMALS;
+
+        Transform3D boardT = new Transform3D();
+        boardT.setTranslation(new Vector3f(signX, signY, signZ));
+        TransformGroup boardTG = new TransformGroup(boardT);
+        boardTG.addChild(new com.sun.j3d.utils.geometry.Box(0.06f, 0.28f, 0.85f, flags, boardApp));
+
+        float halfWidth = 0.45f;
+        float halfHeight = 0.04f;
+
+        com.sun.j3d.utils.geometry.Text2D text = new com.sun.j3d.utils.geometry.Text2D(
+                "Turn the light on!",
+                new Color3f(1.0f, 0.92f, 0.60f),
+                "SansSerif", 24, java.awt.Font.BOLD);
+        text.setRectangleScaleFactor(0.004f);
+
+        Transform3D tCentre = new Transform3D();
+        tCentre.setTranslation(new Vector3f(-halfWidth, -halfHeight, 0f));
+        Transform3D tRot = new Transform3D();
+        tRot.rotY(-Math.PI / 2.0);
+        Transform3D tFront = new Transform3D();
+        tFront.setTranslation(new Vector3f(-0.08f, 0f, 0f));
+        Transform3D combined = new Transform3D(tFront);
+        combined.mul(tRot);
+        combined.mul(tCentre);
+
+        TransformGroup textTG = new TransformGroup(combined);
+        textTG.addChild(text);
+        boardTG.addChild(textTG);
+
+        group.addChild(boardTG);
+        return group;
+    }
+
+    // =========================================================================
+    // LIGHT SWITCH
+    // =========================================================================
+    private TransformGroup buildLightSwitch() {
+        TransformGroup group = new TransformGroup();
+
+        float swX = ROOM_R - 0.28f;
+        float swY = FLOOR_Y + 2.1f;
+        float swZ = 1.6f;
+
+        Appearance plateApp = matEmissive(c(0.70f, 0.70f, 0.70f), c(0.95f, 0.95f, 0.95f), c(0.15f, 0.15f, 0.15f));
+        Appearance leverApp = matEmissive(c(0.50f, 0.50f, 0.50f), c(0.80f, 0.80f, 0.80f), c(0.10f, 0.10f, 0.10f));
+        int flags = com.sun.j3d.utils.geometry.Primitive.GENERATE_NORMALS;
+
+        Transform3D plateT = new Transform3D();
+        plateT.rotY(Math.PI / 2.0);
+        plateT.setTranslation(new Vector3f(swX, swY, swZ));
+        TransformGroup plateTG = new TransformGroup(plateT);
+        plateTG.addChild(new com.sun.j3d.utils.geometry.Box(0.18f, 0.30f, 0.04f, flags, plateApp));
+
+        switchLeverTG = new TransformGroup();
+        switchLeverTG.setCapability(TransformGroup.ALLOW_TRANSFORM_WRITE);
+        Transform3D leverRot = new Transform3D();
+        leverRot.rotX(Math.toRadians(30)); // down = off
+        switchLeverTG.setTransform(leverRot);
+        switchLeverTG.addChild(new com.sun.j3d.utils.geometry.Box(0.06f, 0.14f, 0.07f, flags, leverApp));
+        plateTG.addChild(switchLeverTG);
+
+        group.addChild(plateTG);
+        return group;
+    }
+
+    private TransformGroup buildFireplaceKey() {
+        Appearance keyApp = matEmissive(c(0.45f, 0.30f, 0.04f), c(1.0f, 0.78f, 0.18f), c(0.45f, 0.28f, 0.02f));
+        Shape3D keyShape = new Shape3D(octahedron(0.22f), keyApp);
+
+        TransformGroup spinTG = new TransformGroup();
+        spinTG.setCapability(TransformGroup.ALLOW_TRANSFORM_WRITE);
+        RotationInterpolator spin = new RotationInterpolator(new Alpha(-1, 2200), spinTG,
+                new Transform3D(), 0f, (float) (2 * Math.PI));
+        spin.setSchedulingBounds(wb());
+        spinTG.addChild(keyShape);
+        spinTG.addChild(spin);
+
+        // Start hidden below the floor
+        Transform3D pos = new Transform3D();
+        pos.setTranslation(new Vector3f(FIRE_KEY_POS.x, FLOOR_Y - 1.5f, FIRE_KEY_POS.z));
+        fireplaceKeyTG = new TransformGroup(pos);
+        fireplaceKeyTG.setCapability(TransformGroup.ALLOW_TRANSFORM_WRITE);
+        fireplaceKeyTG.addChild(spinTG);
+        return fireplaceKeyTG;
+    }
+
+    private void toggleFire() {
+        fireOn = !fireOn;
+
+        float[] fireX = { -0.38f, 0.00f, 0.38f };
+        for (int fi = 0; fi < 3; fi++) {
+            Transform3D t = new Transform3D();
+            if (fireOn) {
+                t.setTranslation(new Vector3f(fireX[fi], -0.45f, -0.05f));
+            } else {
+                t.setTranslation(new Vector3f(fireX[fi], -0.45f, 5.0f));
+            }
+            fireDiamondTGs[fi].setTransform(t);
+            fireDiamondLights[fi].setEnable(fireOn);
+        }
+
+        // Tilt lever: up (-30°) = on, down (+30°) = off
+        Transform3D leverRot = new Transform3D();
+        leverRot.rotX(Math.toRadians(fireOn ? -30 : 30));
+        switchLeverTG.setTransform(leverRot);
+
+        // Only animate the key if it hasn't been collected yet
+        if (!fireplaceKeyTaken) {
+            if (fireOn) {
+                new Thread(() -> {
+                    float startY = FLOOR_Y - 1.5f;
+                    float endY = FIRE_KEY_POS.y;
+                    long duration = 1200;
+                    long start = System.currentTimeMillis();
+                    while (true) {
+                        long elapsed = System.currentTimeMillis() - start;
+                        float t = Math.min(elapsed / (float) duration, 1.0f);
+                        float ease = 1f - (1f - t) * (1f - t);
+                        float curY = startY + (endY - startY) * ease;
+                        Transform3D pos2 = new Transform3D();
+                        pos2.setTranslation(new Vector3f(FIRE_KEY_POS.x, curY, FIRE_KEY_POS.z));
+                        fireplaceKeyTG.setTransform(pos2);
+                        if (t >= 1.0f) break;
+                        try { Thread.sleep(16); } catch (InterruptedException ignored) {}
+                    }
+                }, "key-rise").start();
+            } else {
+                Transform3D pos2 = new Transform3D();
+                pos2.setTranslation(new Vector3f(FIRE_KEY_POS.x, FLOOR_Y - 1.5f, FIRE_KEY_POS.z));
+                fireplaceKeyTG.setTransform(pos2);
+            }
+        }
     }
 
     // =========================================================================
@@ -1194,6 +1343,91 @@ public class RoundtableHold extends JFrame {
         }, "door-open").start();
     }
 
+    private boolean victoryShown = false;
+
+    private void showVictoryScreen() {
+        if (victoryShown) return;
+        victoryShown = true;
+        SwingUtilities.invokeLater(() -> {
+            JPanel panel = new JPanel() {
+                protected void paintComponent(Graphics g) {
+                    super.paintComponent(g);
+                    Graphics2D g2 = (Graphics2D) g;
+                    g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+
+                    // Dark vignette background
+                    g2.setColor(new Color(8, 5, 3));
+                    g2.fillRect(0, 0, getWidth(), getHeight());
+
+                    // Faint golden glow behind title
+                    int cx = getWidth() / 2;
+                    int cy = getHeight() / 2 - 60;
+                    java.awt.RadialGradientPaint glow = new java.awt.RadialGradientPaint(
+                            cx, cy, 260,
+                            new float[]{0f, 1f},
+                            new Color[]{new Color(200, 150, 20, 80), new Color(0, 0, 0, 0)});
+                    g2.setPaint(glow);
+                    g2.fillOval(cx - 260, cy - 260, 520, 520);
+
+                    // Title
+                    g2.setFont(new Font("Serif", Font.BOLD, 64));
+                    String title = "YOU ESCAPED";
+                    FontMetrics fm = g2.getFontMetrics();
+                    int tx = (getWidth() - fm.stringWidth(title)) / 2;
+                    g2.setColor(new Color(30, 20, 10));
+                    g2.drawString(title, tx + 3, cy + 3);
+                    g2.setColor(new Color(230, 185, 60));
+                    g2.drawString(title, tx, cy);
+
+                    // Subtitle
+                    g2.setFont(new Font("Serif", Font.ITALIC, 28));
+                    String sub = "The Roundtable Hold fades behind you…";
+                    FontMetrics fm2 = g2.getFontMetrics();
+                    int sx = (getWidth() - fm2.stringWidth(sub)) / 2;
+                    g2.setColor(new Color(180, 150, 90, 200));
+                    g2.drawString(sub, sx, cy + 60);
+
+                    // Instruction
+                    g2.setFont(new Font("SansSerif", Font.PLAIN, 18));
+                    String hint = "Press ESC to exit";
+                    FontMetrics fm3 = g2.getFontMetrics();
+                    int hx = (getWidth() - fm3.stringWidth(hint)) / 2;
+                    g2.setColor(new Color(130, 110, 70, 160));
+                    g2.drawString(hint, hx, getHeight() - 50);
+                }
+            };
+            panel.setOpaque(true);
+            panel.setBackground(new Color(8, 5, 3));
+            panel.addKeyListener(new KeyAdapter() {
+                public void keyPressed(KeyEvent e) {
+                    if (e.getKeyCode() == KeyEvent.VK_ESCAPE) System.exit(0);
+                }
+            });
+
+            JFrame win = new JFrame("Roundtable Hold");
+            win.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
+            win.setUndecorated(true);
+            win.setSize(RoundtableHold.this.getSize());
+            win.setLocationRelativeTo(RoundtableHold.this);
+            win.add(panel);
+            win.setVisible(true);
+            panel.setFocusable(true);
+            panel.requestFocusInWindow();
+
+            // Fade in from black
+            new Thread(() -> {
+                for (int alpha = 255; alpha >= 0; alpha -= 5) {
+                    final int a = alpha;
+                    SwingUtilities.invokeLater(() -> {
+                        panel.putClientProperty("overlay_alpha", a);
+                        panel.repaint();
+                    });
+                    try { Thread.sleep(16); } catch (InterruptedException ignored) {}
+                }
+            }, "fade-in").start();
+        });
+    }
+
     private boolean isWalkable(float x, float z) {
         if ((x * x + z * z) <= (ROOM_R - PLAYER_RADIUS) * (ROOM_R - PLAYER_RADIUS))
             return true;
@@ -1376,6 +1610,11 @@ public class RoundtableHold extends JFrame {
     updateMovement(dt);
     checkKeyPickups();
 
+    // Victory: player reached the far end of the north hallway
+    if (collectedKeys >= 3 && z <= HALL_END_Z + 1.0f) {
+        showVictoryScreen();
+    }
+
     // Picking every frame is expensive, so only do hover checks every 5 frames
     hoverFrameSkip++;
     if (hoverFrameSkip >= 5) {
@@ -1467,6 +1706,23 @@ public class RoundtableHold extends JFrame {
                 float dx = x - KEY_POSITIONS[i].x, dz = z - KEY_POSITIONS[i].z;
                 if (dx * dx + dz * dz < 0.85f * 0.85f) collectKey(i);
             }
+            // Fireplace key — only collectable once fire is on and it has risen above floor
+            if (!fireplaceKeyTaken && fireOn) {
+                float dx = x - FIRE_KEY_POS.x, dz = z - FIRE_KEY_POS.z;
+                if (dx * dx + dz * dz < 0.85f * 0.85f) {
+                    fireplaceKeyTaken = true;
+                    Transform3D hide = new Transform3D();
+                    hide.setScale(0.001);
+                    hide.setTranslation(new Vector3f(FIRE_KEY_POS.x, -100f, FIRE_KEY_POS.z));
+                    fireplaceKeyTG.setTransform(hide);
+                    // Light up the next door gem and count toward the 3 needed
+                    int li = collectedKeys;
+                    collectedKeys++;
+                    doorLightShapes[li].setAppearance(lightAppearance(true));
+                    doorLightNodes[li].setEnable(true);
+                    if (collectedKeys == 3) openDoor();
+                }
+            }
         }
 
         private boolean down(int code) {
@@ -1487,12 +1743,18 @@ public class RoundtableHold extends JFrame {
                 return;
             }
 
-            // E  →  confirm quiz answer OR interact with stray chair
+            // E  →  confirm quiz answer OR interact with stray chair OR toggle fire switch
             if (code == KeyEvent.VK_E) {
                 if (nearBoard) {
                     selectPuzzle1Answer(puzzle1CursorPos);
                 } else if (hoveringStrayChair) {
                     solvePuzzle2();
+                } else {
+                    float swX = ROOM_R - 0.28f, swZ = 1.6f;
+                    float dx = x - swX, dz = z - swZ;
+                    if (dx * dx + dz * dz < 3.5f * 3.5f) {
+                        toggleFire();
+                    }
                 }
             }
         }
@@ -1844,40 +2106,6 @@ public class RoundtableHold extends JFrame {
         TexCoordGeneration tcg = new TexCoordGeneration(
                 TexCoordGeneration.OBJECT_LINEAR, TexCoordGeneration.TEXTURE_COORDINATE_2);
         app.setTexCoordGeneration(tcg);
-        return app;
-    }
-
-    private Appearance fireAppearance() {
-        Appearance app = new Appearance();
-        BufferedImage img = new BufferedImage(64, 64, BufferedImage.TYPE_INT_ARGB);
-        Graphics2D g = img.createGraphics();
-        for (int y = 0; y < 64; y++) {
-            float t = y / 63f;
-            int alpha = (int)(255 * (1.0f - t * 0.6f));
-            int red = 255;
-            int green = (int)(160 - t * 120);
-            int blue = 20;
-            g.setColor(new Color(red, green, blue, alpha));
-            g.drawLine(0, 63 - y, 64, 63 - y);
-        }
-        g.dispose();
-        Texture2D tex = new Texture2D(Texture.BASE_LEVEL, Texture.RGBA, 64, 64);
-        tex.setImage(0, new ImageComponent2D(ImageComponent2D.FORMAT_RGBA, img));
-        tex.setEnable(true);
-        app.setTexture(tex);
-        TextureAttributes ta = new TextureAttributes();
-        ta.setTextureMode(TextureAttributes.MODULATE);
-        app.setTextureAttributes(ta);
-        Material m = new Material();
-        m.setLightingEnable(true);
-        m.setEmissiveColor(new Color3f(1.0f, 0.4f, 0.05f));
-        m.setDiffuseColor(new Color3f(1.0f, 0.6f, 0.1f));
-        app.setMaterial(m);
-        PolygonAttributes pa = new PolygonAttributes();
-        pa.setCullFace(PolygonAttributes.CULL_NONE);
-        app.setPolygonAttributes(pa);
-        TransparencyAttributes tr = new TransparencyAttributes(TransparencyAttributes.BLENDED, 0.2f);
-        app.setTransparencyAttributes(tr);
         return app;
     }
 
