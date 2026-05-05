@@ -83,45 +83,45 @@ public class RoundtableHold extends JFrame {
     private static final String PUZZLE1_CORRECT = "PUZZLE1_CORRECT";
     private static final String PUZZLE1_WRONG = "PUZZLE1_WRONG";
 
-    // The puzzle paper is stored so we can redraw it with a check/x mark when answered.
+    // The puzzle paper is stored so we can redraw it with a check/x mark when
+    // answered.
     private Shape3D puzzle1PaperShape;
     // 0-3 = cursor position on the board (cycles with SHIFT when near board)
-    private int puzzle1CursorPos  = 0;
+    private int puzzle1CursorPos = 0;
     // -1 = no wrong guess yet, 0/2/3 = index of last wrong guess (shown with ✗)
-    private int puzzle1LastWrong  = -1;
+    private int puzzle1LastWrong = -1;
     // Board world position — used for proximity check
-    private static final float BOARD_Z = (float)(Math.sqrt(14.0*14.0 - (5.5f/2f)*(5.5f/2f)) - 0.1f - 0.18f);
+    private static final float BOARD_Z = (float) (Math.sqrt(14.0 * 14.0 - (5.5f / 2f) * (5.5f / 2f)) - 0.1f - 0.18f);
     private static final float BOARD_INTERACT_DIST = 5.5f;
 
     // ── puzzle 2 : stray chair ─────────────────────────────────────────────────
     // The stray chair sits pulled OUT from the table; all others are tucked under.
     // Player must look at the stray chair and press E (or click) to push it under.
     private static final String PUZZLE2_CHAIR = "PUZZLE2_CHAIR";
-    private TransformGroup strayChairTG;          // animated when solved
-    private Shape3D        strayChairHitbox;      // invisible pickable hitbox
+    private TransformGroup strayChairTG; // animated when solved
+    private Shape3D strayChairHitbox; // invisible pickable hitbox
     // World position of the stray chair (pulled out from seat i=2, angle≈2π/6*2)
-    private static final double STRAY_ANGLE      = Math.PI * 2.0 / 6.0 * 2.0; // 120°
-    private static final float  STRAY_CHAIR_DIST = TABLE_R + 2.35f;  // pulled out extra
-    private static final float  STRAY_CHAIR_X    = (float)(Math.cos(STRAY_ANGLE) * STRAY_CHAIR_DIST);
-    private static final float  STRAY_CHAIR_Z    = (float)(Math.sin(STRAY_ANGLE) * STRAY_CHAIR_DIST);
+    private static final double STRAY_ANGLE = Math.PI * 2.0 / 6.0 * 2.0; // 120°
+    private static final float STRAY_CHAIR_DIST = TABLE_R + 2.35f; // pulled out extra
+    private static final float STRAY_CHAIR_X = (float) (Math.cos(STRAY_ANGLE) * STRAY_CHAIR_DIST);
+    private static final float STRAY_CHAIR_Z = (float) (Math.sin(STRAY_ANGLE) * STRAY_CHAIR_DIST);
     // Tucked-under destination (same angle, close to table edge)
-    private static final float  TUCKED_DIST      = TABLE_R - 0.30f;
-    private static final float  TUCKED_X         = (float)(Math.cos(STRAY_ANGLE) * TUCKED_DIST);
-    private static final float  TUCKED_Z         = (float)(Math.sin(STRAY_ANGLE) * TUCKED_DIST);
+    private static final float TUCKED_DIST = TABLE_R - 0.30f;
+    private static final float TUCKED_X = (float) (Math.cos(STRAY_ANGLE) * TUCKED_DIST);
+    private static final float TUCKED_Z = (float) (Math.sin(STRAY_ANGLE) * TUCKED_DIST);
     private final Shape3D[] doorLightShapes = new Shape3D[3];
     private final PointLight[] doorLightNodes = new PointLight[3];
     private TransformGroup doorTG;
     private int collectedKeys = 0;
 
     // ── fireplace switch / key ────────────────────────────────────────────────
-    private final TransformGroup[] fireDiamondTGs    = new TransformGroup[3];
-    private final PointLight[]     fireDiamondLights = new PointLight[3];
-    private boolean fireOn = false;          // starts OFF — click switch to reveal the key
+    private final TransformGroup[] fireDiamondTGs = new TransformGroup[3];
+    private final PointLight[] fireDiamondLights = new PointLight[3];
+    private boolean fireOn = false; // starts OFF — click switch to reveal the key
     private TransformGroup switchLeverTG;
-    private TransformGroup fireplaceKeyTG;   // rises from floor when fire is switched on
+    private TransformGroup fireplaceKeyTG; // rises from floor when fire is switched on
     private boolean fireplaceKeyTaken = false;
-    private static final Point3f FIRE_KEY_POS =
-            new Point3f(ROOM_R - 2.5f, FLOOR_Y + 0.45f, 0.0f);
+    private static final Point3f FIRE_KEY_POS = new Point3f(ROOM_R - 2.5f, FLOOR_Y + 0.45f, 0.0f);
 
     private static final Point3f[] KEY_POSITIONS = new Point3f[] {
             new Point3f(5.5f, FLOOR_Y + 0.45f, 4.8f),
@@ -238,7 +238,7 @@ public class RoundtableHold extends JFrame {
         controller.setSchedulingBounds(wb());
         canvas.addKeyListener(controller);
         canvas.addMouseMotionListener(controller);
-        canvas.addMouseListener(controller);  // tracks mouseButtonHeld for robot suppression
+        canvas.addMouseListener(controller); // tracks mouseButtonHeld for robot suppression
         root.addChild(controller);
 
         return root;
@@ -718,7 +718,8 @@ public class RoundtableHold extends JFrame {
             double angle = i * Math.PI * 2.0 / 6.0;
 
             // Chair 2 (i==2) is the STRAY chair — built separately below
-            if (i == 2) continue;
+            if (i == 2)
+                continue;
 
             float x = (float) Math.cos(angle) * tuckedDist;
             float z = (float) Math.sin(angle) * tuckedDist;
@@ -739,7 +740,7 @@ public class RoundtableHold extends JFrame {
         Transform3D strayPos = new Transform3D();
         strayPos.setTranslation(new Vector3f(STRAY_CHAIR_X, FLOOR_Y + 0.55f, STRAY_CHAIR_Z));
         Transform3D strayRot = new Transform3D();
-        strayRot.rotY(-(float)STRAY_ANGLE + (float)(Math.PI / 2.0));
+        strayRot.rotY(-(float) STRAY_ANGLE + (float) (Math.PI / 2.0));
         strayPos.mul(strayRot);
 
         strayChairTG = new TransformGroup(strayPos);
@@ -771,7 +772,10 @@ public class RoundtableHold extends JFrame {
         return chair;
     }
 
-    /** Invisible pickable box that surrounds the stray chair so the player can interact with it. */
+    /**
+     * Invisible pickable box that surrounds the stray chair so the player can
+     * interact with it.
+     */
     private TransformGroup buildStrayChairHitbox() {
         TransformGroup group = new TransformGroup();
 
@@ -781,37 +785,38 @@ public class RoundtableHold extends JFrame {
         float cy = FLOOR_Y + 0.55f + hy / 2f;
         float cz = STRAY_CHAIR_Z;
 
-        // Six-sided invisible hitbox (top face is the most reliably picked by crosshair)
+        // Six-sided invisible hitbox (top face is the most reliably picked by
+        // crosshair)
         // Top face — stored as the primary hitbox reference
         strayChairHitbox = makeHitboxFace(
-            p(cx - hx, cy + hy, cz - hz), p(cx + hx, cy + hy, cz - hz),
-            p(cx + hx, cy + hy, cz + hz), p(cx - hx, cy + hy, cz + hz),
-            new float[]{0, 1, 0});
+                p(cx - hx, cy + hy, cz - hz), p(cx + hx, cy + hy, cz - hz),
+                p(cx + hx, cy + hy, cz + hz), p(cx - hx, cy + hy, cz + hz),
+                new float[] { 0, 1, 0 });
         group.addChild(strayChairHitbox);
 
         // Front face
         group.addChild(makeHitboxFace(
-            p(cx - hx, cy - hy, cz + hz), p(cx + hx, cy - hy, cz + hz),
-            p(cx + hx, cy + hy, cz + hz), p(cx - hx, cy + hy, cz + hz),
-            new float[]{0, 0, 1}));
+                p(cx - hx, cy - hy, cz + hz), p(cx + hx, cy - hy, cz + hz),
+                p(cx + hx, cy + hy, cz + hz), p(cx - hx, cy + hy, cz + hz),
+                new float[] { 0, 0, 1 }));
 
         // Back face
         group.addChild(makeHitboxFace(
-            p(cx + hx, cy - hy, cz - hz), p(cx - hx, cy - hy, cz - hz),
-            p(cx - hx, cy + hy, cz - hz), p(cx + hx, cy + hy, cz - hz),
-            new float[]{0, 0, -1}));
+                p(cx + hx, cy - hy, cz - hz), p(cx - hx, cy - hy, cz - hz),
+                p(cx - hx, cy + hy, cz - hz), p(cx + hx, cy + hy, cz - hz),
+                new float[] { 0, 0, -1 }));
 
         // Left face
         group.addChild(makeHitboxFace(
-            p(cx - hx, cy - hy, cz - hz), p(cx - hx, cy - hy, cz + hz),
-            p(cx - hx, cy + hy, cz + hz), p(cx - hx, cy + hy, cz - hz),
-            new float[]{-1, 0, 0}));
+                p(cx - hx, cy - hy, cz - hz), p(cx - hx, cy - hy, cz + hz),
+                p(cx - hx, cy + hy, cz + hz), p(cx - hx, cy + hy, cz - hz),
+                new float[] { -1, 0, 0 }));
 
         // Right face
         group.addChild(makeHitboxFace(
-            p(cx + hx, cy - hy, cz + hz), p(cx + hx, cy - hy, cz - hz),
-            p(cx + hx, cy + hy, cz - hz), p(cx + hx, cy + hy, cz + hz),
-            new float[]{1, 0, 0}));
+                p(cx + hx, cy - hy, cz + hz), p(cx + hx, cy - hy, cz - hz),
+                p(cx + hx, cy + hy, cz - hz), p(cx + hx, cy + hy, cz + hz),
+                new float[] { 1, 0, 0 }));
 
         return group;
     }
@@ -821,7 +826,7 @@ public class RoundtableHold extends JFrame {
         Shape3D face = new Shape3D(quadGeo(bl, br, tr, tl, n), invisiblePickAppearance());
         face.setUserData(PUZZLE2_CHAIR);
         face.setCapability(Shape3D.ALLOW_APPEARANCE_WRITE);
-        face.setCapability(Node.ALLOW_PICKABLE_WRITE);   // required to call setPickable() at runtime
+        face.setCapability(Node.ALLOW_PICKABLE_WRITE); // required to call setPickable() at runtime
         face.setPickable(true);
         return face;
     }
@@ -1097,8 +1102,12 @@ public class RoundtableHold extends JFrame {
                         Transform3D pos2 = new Transform3D();
                         pos2.setTranslation(new Vector3f(FIRE_KEY_POS.x, curY, FIRE_KEY_POS.z));
                         fireplaceKeyTG.setTransform(pos2);
-                        if (t >= 1.0f) break;
-                        try { Thread.sleep(16); } catch (InterruptedException ignored) {}
+                        if (t >= 1.0f)
+                            break;
+                        try {
+                            Thread.sleep(16);
+                        } catch (InterruptedException ignored) {
+                        }
                     }
                 }, "key-rise").start();
             } else {
@@ -1169,59 +1178,63 @@ public class RoundtableHold extends JFrame {
     }
 
     private Transform3D hiddenKeyTransform(int index) {
-    Transform3D t = new Transform3D();
-    t.setTranslation(new Vector3f(
-            KEY_POSITIONS[index].x,
-            FLOOR_Y - 0.55f,
-            KEY_POSITIONS[index].z
-    ));
-    return t;
-}
+        Transform3D t = new Transform3D();
+        t.setTranslation(new Vector3f(
+                KEY_POSITIONS[index].x,
+                FLOOR_Y - 0.55f,
+                KEY_POSITIONS[index].z));
+        return t;
+    }
 
     private void spawnKey(int index) {
-    if (index < 0 || index >= keyTGs.length) return;
-    if (keySpawned[index] || keyTaken[index]) return;
+        if (index < 0 || index >= keyTGs.length)
+            return;
+        if (keySpawned[index] || keyTaken[index])
+            return;
 
-    keySpawned[index] = true;
+        keySpawned[index] = true;
 
-    new Thread(() -> {
-        long durationMs = 1200;
-        long startTime = System.currentTimeMillis();
+        new Thread(() -> {
+            long durationMs = 1200;
+            long startTime = System.currentTimeMillis();
 
-        float startY = FLOOR_Y - 0.55f;
-        float endY = KEY_POSITIONS[index].y;
+            float startY = FLOOR_Y - 0.55f;
+            float endY = KEY_POSITIONS[index].y;
 
-        while (true) {
-            long elapsed = System.currentTimeMillis() - startTime;
-            float t = Math.min(elapsed / (float) durationMs, 1.0f);
+            while (true) {
+                long elapsed = System.currentTimeMillis() - startTime;
+                float t = Math.min(elapsed / (float) durationMs, 1.0f);
 
-            // smooth ease-out
-            float ease = 1f - (1f - t) * (1f - t);
+                // smooth ease-out
+                float ease = 1f - (1f - t) * (1f - t);
 
-            float currentY = startY + (endY - startY) * ease;
+                float currentY = startY + (endY - startY) * ease;
 
-            Transform3D tx = new Transform3D();
-            tx.setTranslation(new Vector3f(
-                    KEY_POSITIONS[index].x,
-                    currentY,
-                    KEY_POSITIONS[index].z
-            ));
+                Transform3D tx = new Transform3D();
+                tx.setTranslation(new Vector3f(
+                        KEY_POSITIONS[index].x,
+                        currentY,
+                        KEY_POSITIONS[index].z));
 
-            keyTGs[index].setTransform(tx);
+                keyTGs[index].setTransform(tx);
 
-            if (t >= 1.0f) break;
+                if (t >= 1.0f)
+                    break;
 
-            try {
-                Thread.sleep(16);
-            } catch (InterruptedException ignored) {}
-        }
-    }, "key-rise-" + index).start();
-}
+                try {
+                    Thread.sleep(16);
+                } catch (InterruptedException ignored) {
+                }
+            }
+        }, "key-rise-" + index).start();
+    }
 
     private void answerPuzzle1Wrong(int chosenIndex) {
-        if (puzzleSolved[0]) return;
+        if (puzzleSolved[0])
+            return;
         puzzle1LastWrong = chosenIndex;
-        // Redraw board: show ✗ on the wrong guess but keep cursor visible so player can retry
+        // Redraw board: show ✗ on the wrong guess but keep cursor visible so player can
+        // retry
         if (puzzle1PaperShape != null) {
             puzzle1PaperShape.setAppearance(puzzlePaperAppearance(puzzle1LastWrong, puzzle1CursorPos));
         }
@@ -1248,7 +1261,10 @@ public class RoundtableHold extends JFrame {
         return group;
     }
 
-    /** Returns true if the player is close enough to the south puzzle board to interact. */
+    /**
+     * Returns true if the player is close enough to the south puzzle board to
+     * interact.
+     */
     private boolean nearPuzzleBoard(float px, float pz) {
         float dz = pz - BOARD_Z;
         return (px * px + dz * dz) < BOARD_INTERACT_DIST * BOARD_INTERACT_DIST;
@@ -1346,7 +1362,8 @@ public class RoundtableHold extends JFrame {
     private boolean victoryShown = false;
 
     private void showVictoryScreen() {
-        if (victoryShown) return;
+        if (victoryShown)
+            return;
         victoryShown = true;
         SwingUtilities.invokeLater(() -> {
             JPanel panel = new JPanel() {
@@ -1364,8 +1381,8 @@ public class RoundtableHold extends JFrame {
                     int cy = getHeight() / 2 - 60;
                     java.awt.RadialGradientPaint glow = new java.awt.RadialGradientPaint(
                             cx, cy, 260,
-                            new float[]{0f, 1f},
-                            new Color[]{new Color(200, 150, 20, 80), new Color(0, 0, 0, 0)});
+                            new float[] { 0f, 1f },
+                            new Color[] { new Color(200, 150, 20, 80), new Color(0, 0, 0, 0) });
                     g2.setPaint(glow);
                     g2.fillOval(cx - 260, cy - 260, 520, 520);
 
@@ -1381,7 +1398,7 @@ public class RoundtableHold extends JFrame {
 
                     // Subtitle
                     g2.setFont(new Font("Serif", Font.ITALIC, 28));
-                    String sub = "The Roundtable Hold fades behind you…";
+                    String sub = "The Roundtable Hold fades behind you...";
                     FontMetrics fm2 = g2.getFontMetrics();
                     int sx = (getWidth() - fm2.stringWidth(sub)) / 2;
                     g2.setColor(new Color(180, 150, 90, 200));
@@ -1400,7 +1417,8 @@ public class RoundtableHold extends JFrame {
             panel.setBackground(new Color(8, 5, 3));
             panel.addKeyListener(new KeyAdapter() {
                 public void keyPressed(KeyEvent e) {
-                    if (e.getKeyCode() == KeyEvent.VK_ESCAPE) System.exit(0);
+                    if (e.getKeyCode() == KeyEvent.VK_ESCAPE)
+                        System.exit(0);
                 }
             });
 
@@ -1422,7 +1440,10 @@ public class RoundtableHold extends JFrame {
                         panel.putClientProperty("overlay_alpha", a);
                         panel.repaint();
                     });
-                    try { Thread.sleep(16); } catch (InterruptedException ignored) {}
+                    try {
+                        Thread.sleep(16);
+                    } catch (InterruptedException ignored) {
+                    }
                 }
             }, "fade-in").start();
         });
@@ -1473,23 +1494,22 @@ public class RoundtableHold extends JFrame {
             upperGlow.setColor(new Color3f(
                     0.85f * flicker,
                     0.42f * flicker,
-                    0.08f * flicker
-            ));
+                    0.08f * flicker));
             mainLight.setAttenuation(new Point3f(
                     0.025f + (float) Math.random() * 0.015f,
                     0.010f + (float) Math.random() * 0.010f,
-                    0.001f + (float) Math.random() * 0.002f
-            ));
+                    0.001f + (float) Math.random() * 0.002f));
             upperGlow.setAttenuation(new Point3f(
                     0.045f + (float) Math.random() * 0.015f,
                     0.018f + (float) Math.random() * 0.008f,
-                    0.004f + (float) Math.random() * 0.002f
-            ));
+                    0.004f + (float) Math.random() * 0.002f));
             wakeupOn(wakeup);
         }
     }
+
     private void selectPuzzle1Answer(int chosenIndex) {
-        if (puzzleSolved[0]) return;
+        if (puzzleSolved[0])
+            return;
 
         if (chosenIndex == 1) {
             // Correct answer: (b) Ambient Light
@@ -1506,7 +1526,8 @@ public class RoundtableHold extends JFrame {
 
     // ── puzzle 2 solution ─────────────────────────────────────────────────────
     private void solvePuzzle2() {
-        if (puzzleSolved[1]) return;
+        if (puzzleSolved[1])
+            return;
         puzzleSolved[1] = true;
 
         // Hide the hitbox so it can no longer be interacted with
@@ -1515,14 +1536,14 @@ public class RoundtableHold extends JFrame {
         // Animate the stray chair sliding under the table
         float startX = STRAY_CHAIR_X;
         float startZ = STRAY_CHAIR_Z;
-        float endX   = TUCKED_X;
-        float endZ   = TUCKED_Z;
+        float endX = TUCKED_X;
+        float endZ = TUCKED_Z;
         float chairY = FLOOR_Y + 0.55f;
-        float chairRot = -(float)STRAY_ANGLE + (float)(Math.PI / 2.0);
+        float chairRot = -(float) STRAY_ANGLE + (float) (Math.PI / 2.0);
 
         new Thread(() -> {
             long durationMs = 900;
-            long startTime  = System.currentTimeMillis();
+            long startTime = System.currentTimeMillis();
             while (true) {
                 long elapsed = System.currentTimeMillis() - startTime;
                 float t = Math.min(elapsed / (float) durationMs, 1.0f);
@@ -1539,13 +1560,18 @@ public class RoundtableHold extends JFrame {
                 tx.mul(rot);
                 strayChairTG.setTransform(tx);
 
-                if (t >= 1.0f) break;
-                try { Thread.sleep(16); } catch (InterruptedException ignored) {}
+                if (t >= 1.0f)
+                    break;
+                try {
+                    Thread.sleep(16);
+                } catch (InterruptedException ignored) {
+                }
             }
             // Once the chair is fully tucked, rise the key
             spawnKey(1);
         }, "chair-push").start();
     }
+
     // =========================================================================
     // PUZZLE CLICK HANDLER
     // =========================================================================
@@ -1600,50 +1626,54 @@ public class RoundtableHold extends JFrame {
         }
 
         public void processStimulus(java.util.Enumeration criteria) {
-    long now = System.nanoTime();
-    float dt = (now - lastFrameTime) / 1_000_000_000.0f;
-    lastFrameTime = now;
+            long now = System.nanoTime();
+            float dt = (now - lastFrameTime) / 1_000_000_000.0f;
+            lastFrameTime = now;
 
-    // Prevent giant jumps after lag/spikes
-    if (dt > 0.05f) dt = 0.05f;
+            // Prevent giant jumps after lag/spikes
+            if (dt > 0.05f)
+                dt = 0.05f;
 
-    updateMovement(dt);
-    checkKeyPickups();
+            updateMovement(dt);
+            checkKeyPickups();
 
-    // Victory: player reached the far end of the north hallway
-    if (collectedKeys >= 3 && z <= HALL_END_Z + 1.0f) {
-        showVictoryScreen();
-    }
+            // Victory: player reached the far end of the north hallway
+            if (collectedKeys >= 3 && z <= HALL_END_Z + 1.0f) {
+                showVictoryScreen();
+            }
 
-    // Picking every frame is expensive, so only do hover checks every 5 frames
-    hoverFrameSkip++;
-    if (hoverFrameSkip >= 5) {
-        updateHoverHighlight();
-        hoverFrameSkip = 0;
-    }
+            // Picking every frame is expensive, so only do hover checks every 5 frames
+            hoverFrameSkip++;
+            if (hoverFrameSkip >= 5) {
+                updateHoverHighlight();
+                hoverFrameSkip = 0;
+            }
 
-    if (robotReady && canvas.isShowing() && !mouseButtonHeld) {
-        Point loc = canvas.getLocationOnScreen();
-        int cx = loc.x + canvas.getWidth() / 2;
-        int cy = loc.y + canvas.getHeight() / 2;
-        robot.mouseMove(cx, cy);
-        firstWarp = false;
-    }
+            if (robotReady && canvas.isShowing() && !mouseButtonHeld) {
+                Point loc = canvas.getLocationOnScreen();
+                int cx = loc.x + canvas.getWidth() / 2;
+                int cy = loc.y + canvas.getHeight() / 2;
+                robot.mouseMove(cx, cy);
+                firstWarp = false;
+            }
 
-    wakeupOn(wakeup);
-}
+            wakeupOn(wakeup);
+        }
 
         private boolean hoveringStrayChair = false;
 
         private void updateHoverHighlight() {
             hoveringStrayChair = false;
 
-            if (puzzleSolved[1]) return; // stray chair already solved, skip pick
-            if (hoverPickCanvas == null || canvas == null || !canvas.isShowing()) return;
+            if (puzzleSolved[1])
+                return; // stray chair already solved, skip pick
+            if (hoverPickCanvas == null || canvas == null || !canvas.isShowing())
+                return;
 
             hoverPickCanvas.setShapeLocation(canvas.getWidth() / 2, canvas.getHeight() / 2);
             PickResult result = hoverPickCanvas.pickClosest();
-            if (result == null) return;
+            if (result == null)
+                return;
 
             Node node = result.getNode(PickResult.SHAPE3D);
             if (node instanceof Shape3D && PUZZLE2_CHAIR.equals(node.getUserData())) {
@@ -1652,59 +1682,73 @@ public class RoundtableHold extends JFrame {
         }
 
         private void updateMovement(float dt) {
-    float forward = 0f, strafe = 0f;
+            float forward = 0f, strafe = 0f;
 
-    if (down(KeyEvent.VK_W)) forward += 1f;
-    if (down(KeyEvent.VK_S)) forward -= 1f;
-    if (down(KeyEvent.VK_A)) strafe -= 1f;
-    if (down(KeyEvent.VK_D)) strafe += 1f;
+            if (down(KeyEvent.VK_W))
+                forward += 1f;
+            if (down(KeyEvent.VK_S))
+                forward -= 1f;
+            if (down(KeyEvent.VK_A))
+                strafe -= 1f;
+            if (down(KeyEvent.VK_D))
+                strafe += 1f;
 
-    if (down(KeyEvent.VK_LEFT)) yaw += TURN_SPEED * dt;
-    if (down(KeyEvent.VK_RIGHT)) yaw -= TURN_SPEED * dt;
-    if (down(KeyEvent.VK_UP)) pitch += TURN_SPEED * dt;
-    if (down(KeyEvent.VK_DOWN)) pitch -= TURN_SPEED * dt;
+            if (down(KeyEvent.VK_LEFT))
+                yaw += TURN_SPEED * dt;
+            if (down(KeyEvent.VK_RIGHT))
+                yaw -= TURN_SPEED * dt;
+            if (down(KeyEvent.VK_UP))
+                pitch += TURN_SPEED * dt;
+            if (down(KeyEvent.VK_DOWN))
+                pitch -= TURN_SPEED * dt;
 
-    clampPitch();
+            clampPitch();
 
-    if (forward != 0f || strafe != 0f) {
-        float len = (float) Math.sqrt(forward * forward + strafe * strafe);
-        forward /= len;
-        strafe /= len;
+            if (forward != 0f || strafe != 0f) {
+                float len = (float) Math.sqrt(forward * forward + strafe * strafe);
+                forward /= len;
+                strafe /= len;
 
-        float sin = (float) Math.sin(yaw);
-        float cos = (float) Math.cos(yaw);
+                float sin = (float) Math.sin(yaw);
+                float cos = (float) Math.cos(yaw);
 
-        float moveAmount = WALK_SPEED * dt;
+                float moveAmount = WALK_SPEED * dt;
 
-        float dx = (-sin * forward + cos * strafe) * moveAmount;
-        float dz = (-cos * forward - sin * strafe) * moveAmount;
+                float dx = (-sin * forward + cos * strafe) * moveAmount;
+                float dz = (-cos * forward - sin * strafe) * moveAmount;
 
-        if (isWalkable(x + dx, z)) x += dx;
-        if (isWalkable(x, z + dz)) z += dz;
-    }
+                if (isWalkable(x + dx, z))
+                    x += dx;
+                if (isWalkable(x, z + dz))
+                    z += dz;
+            }
 
-    Transform3D yawT = new Transform3D();
-    yawT.rotY(yaw);
+            Transform3D yawT = new Transform3D();
+            yawT.rotY(yaw);
 
-    Transform3D pitchT = new Transform3D();
-    pitchT.rotX(pitch);
+            Transform3D pitchT = new Transform3D();
+            pitchT.rotX(pitch);
 
-    yawT.mul(pitchT);
-    yawT.setTranslation(new Vector3f(x, PLAYER_EYE_Y, z));
-    viewTG.setTransform(yawT);
-}
+            yawT.mul(pitchT);
+            yawT.setTranslation(new Vector3f(x, PLAYER_EYE_Y, z));
+            viewTG.setTransform(yawT);
+        }
 
         private void clampPitch() {
             float limit = (float) Math.toRadians(80);
-            if (pitch > limit) pitch = limit;
-            if (pitch < -limit) pitch = -limit;
+            if (pitch > limit)
+                pitch = limit;
+            if (pitch < -limit)
+                pitch = -limit;
         }
 
         private void checkKeyPickups() {
             for (int i = 0; i < KEY_POSITIONS.length; i++) {
-                if (!keySpawned[i] || keyTaken[i]) continue;
+                if (!keySpawned[i] || keyTaken[i])
+                    continue;
                 float dx = x - KEY_POSITIONS[i].x, dz = z - KEY_POSITIONS[i].z;
-                if (dx * dx + dz * dz < 0.85f * 0.85f) collectKey(i);
+                if (dx * dx + dz * dz < 0.85f * 0.85f)
+                    collectKey(i);
             }
             // Fireplace key — only collectable once fire is on and it has risen above floor
             if (!fireplaceKeyTaken && fireOn) {
@@ -1720,7 +1764,8 @@ public class RoundtableHold extends JFrame {
                     collectedKeys++;
                     doorLightShapes[li].setAppearance(lightAppearance(true));
                     doorLightNodes[li].setEnable(true);
-                    if (collectedKeys == 3) openDoor();
+                    if (collectedKeys == 3)
+                        openDoor();
                 }
             }
         }
@@ -1731,11 +1776,12 @@ public class RoundtableHold extends JFrame {
 
         public void keyPressed(KeyEvent e) {
             int code = e.getKeyCode();
-            if (code >= 0 && code < keys.length) keys[code] = true;
+            if (code >= 0 && code < keys.length)
+                keys[code] = true;
 
             boolean nearBoard = !puzzleSolved[0] && nearPuzzleBoard(x, z);
 
-            // SHIFT  →  cycle cursor downward through answers (wraps bottom back to top)
+            // SHIFT → cycle cursor downward through answers (wraps bottom back to top)
             if (nearBoard && code == KeyEvent.VK_SHIFT) {
                 puzzle1CursorPos = (puzzle1CursorPos + 1) % 4;
                 if (puzzle1PaperShape != null)
@@ -1743,7 +1789,7 @@ public class RoundtableHold extends JFrame {
                 return;
             }
 
-            // E  →  confirm quiz answer OR interact with stray chair OR toggle fire switch
+            // E → confirm quiz answer OR interact with stray chair OR toggle fire switch
             if (code == KeyEvent.VK_E) {
                 if (nearBoard) {
                     selectPuzzle1Answer(puzzle1CursorPos);
@@ -1761,28 +1807,46 @@ public class RoundtableHold extends JFrame {
 
         public void keyReleased(KeyEvent e) {
             int code = e.getKeyCode();
-            if (code >= 0 && code < keys.length) keys[code] = false;
+            if (code >= 0 && code < keys.length)
+                keys[code] = false;
         }
 
-        public void keyTyped(KeyEvent e) {}
+        public void keyTyped(KeyEvent e) {
+        }
 
         // MouseListener — track button state so robot warp is suppressed during clicks
-        public void mousePressed(MouseEvent e)  { mouseButtonHeld = true;  }
-        public void mouseReleased(MouseEvent e) { mouseButtonHeld = false; }
-        public void mouseClicked(MouseEvent e)  {}
-        public void mouseEntered(MouseEvent e)  {}
-        public void mouseExited(MouseEvent e)   {}
+        public void mousePressed(MouseEvent e) {
+            mouseButtonHeld = true;
+        }
 
-        public void mouseDragged(MouseEvent e) { mouseMoved(e); }
+        public void mouseReleased(MouseEvent e) {
+            mouseButtonHeld = false;
+        }
+
+        public void mouseClicked(MouseEvent e) {
+        }
+
+        public void mouseEntered(MouseEvent e) {
+        }
+
+        public void mouseExited(MouseEvent e) {
+        }
+
+        public void mouseDragged(MouseEvent e) {
+            mouseMoved(e);
+        }
 
         public void mouseMoved(MouseEvent e) {
-            if (!canvas.hasFocus()) canvas.requestFocusInWindow();
-            if (!robotReady || firstWarp || !canvas.isShowing()) return;
+            if (!canvas.hasFocus())
+                canvas.requestFocusInWindow();
+            if (!robotReady || firstWarp || !canvas.isShowing())
+                return;
             int cx = canvas.getWidth() / 2;
             int cy = canvas.getHeight() / 2;
             int dx = e.getX() - cx;
             int dy = e.getY() - cy;
-            if (dx == 0 && dy == 0) return;
+            if (dx == 0 && dy == 0)
+                return;
             yaw -= dx * MOUSE_SENS;
             pitch -= dy * MOUSE_SENS;
             clampPitch();
@@ -1795,8 +1859,12 @@ public class RoundtableHold extends JFrame {
     private void addTriN(ArrayList<float[]> vv, ArrayList<float[]> nn,
             float nx, float ny, float nz, float[] a, float[] b, float[] c) {
         float[] n = { nx, ny, nz };
-        vv.add(a); vv.add(b); vv.add(c);
-        nn.add(n); nn.add(n); nn.add(n);
+        vv.add(a);
+        vv.add(b);
+        vv.add(c);
+        nn.add(n);
+        nn.add(n);
+        nn.add(n);
     }
 
     private void addQuadN(ArrayList<float[]> vv, ArrayList<float[]> nn,
@@ -1812,8 +1880,12 @@ public class RoundtableHold extends JFrame {
         float[] vc = new float[cnt * 3], nc = new float[cnt * 3];
         for (int i = 0; i < cnt; i++) {
             float[] v = vv.get(i), n = nn.get(i);
-            vc[i * 3] = v[0]; vc[i * 3 + 1] = v[1]; vc[i * 3 + 2] = v[2];
-            nc[i * 3] = n[0]; nc[i * 3 + 1] = n[1]; nc[i * 3 + 2] = n[2];
+            vc[i * 3] = v[0];
+            vc[i * 3 + 1] = v[1];
+            vc[i * 3 + 2] = v[2];
+            nc[i * 3] = n[0];
+            nc[i * 3 + 1] = n[1];
+            nc[i * 3 + 2] = n[2];
         }
         geo.setCoordinates(0, vc);
         geo.setNormals(0, nc);
@@ -1865,8 +1937,12 @@ public class RoundtableHold extends JFrame {
             n.normalize();
             for (int j = 0; j < 3; j++) {
                 int k = (i + j) * 3;
-                co[k] = verts[i + j][0]; co[k + 1] = verts[i + j][1]; co[k + 2] = verts[i + j][2];
-                no[k] = n.x; no[k + 1] = n.y; no[k + 2] = n.z;
+                co[k] = verts[i + j][0];
+                co[k + 1] = verts[i + j][1];
+                co[k + 2] = verts[i + j][2];
+                no[k] = n.x;
+                no[k + 1] = n.y;
+                no[k + 2] = n.z;
             }
         }
         geo.setCoordinates(0, co);
@@ -1909,15 +1985,15 @@ public class RoundtableHold extends JFrame {
                 "Which of the following light types provides a uniform illumination in all directions and locations, generally serving as a simplified representation of the numerous weak interobject reflections in a real-world scene?",
                 115, 185, 800, 38);
 
-        String[] labels    = { "(a) Point Light", "(b) Ambient Light", "(c) Directional Light", "(d) Spotlight" };
-        int[]    labelYs   = { 455, 520, 585, 650 };
-        int      correctIdx = 1; // (b) Ambient Light
+        String[] labels = { "(a) Point Light", "(b) Ambient Light", "(c) Directional Light", "(d) Spotlight" };
+        int[] labelYs = { 455, 520, 585, 650 };
+        int correctIdx = 1; // (b) Ambient Light
 
         // Controls hint at bottom
         if (chosenIndex < 0) {
             g.setFont(new Font("Serif", Font.ITALIC, 24));
             g.setColor(new Color(90, 58, 28, 180));
-            g.drawString("SHIFT to cycle  •  E to confirm", 315, 710);
+            g.drawString("SHIFT to cycle  -  E to confirm", 315, 710);
         }
 
         boolean solved = (chosenIndex == correctIdx);
@@ -1983,7 +2059,8 @@ public class RoundtableHold extends JFrame {
                 line = test;
             }
         }
-        if (!line.isEmpty()) g.drawString(line, x, y);
+        if (!line.isEmpty())
+            g.drawString(line, x, y);
     }
 
     private Appearance answerNormalAppearance() {
@@ -2044,7 +2121,8 @@ public class RoundtableHold extends JFrame {
         qa.setCoordinate(2, new Point3f(x2, y2, z2));
         qa.setCoordinate(3, new Point3f(x1, y2, z2));
         Vector3f normal = new Vector3f(n[0], n[1], n[2]);
-        for (int i = 0; i < 4; i++) qa.setNormal(i, normal);
+        for (int i = 0; i < 4; i++)
+            qa.setNormal(i, normal);
         qa.setTextureCoordinate(0, 0, new TexCoord2f(1f, 0f));
         qa.setTextureCoordinate(0, 1, new TexCoord2f(0f, 0f));
         qa.setTextureCoordinate(0, 2, new TexCoord2f(0f, 1f));
@@ -2080,13 +2158,15 @@ public class RoundtableHold extends JFrame {
                 g.drawLine(0, y, size, Math.max(0, Math.min(size - 1, y + wobble)));
             }
             g.setColor(base.darker());
-            for (int x = 0; x < size; x += 32) g.drawLine(x, 0, x, size);
+            for (int x = 0; x < size; x += 32)
+                g.drawLine(x, 0, x, size);
         } else {
             int brickH = 16, brickW = 32;
             for (int y = 0; y < size; y += brickH) {
                 g.drawLine(0, y, size, y);
                 int offset = ((y / brickH) % 2) * (brickW / 2);
-                for (int x = -offset; x < size; x += brickW) g.drawLine(x, y, x, y + brickH);
+                for (int x = -offset; x < size; x += brickW)
+                    g.drawLine(x, y, x, y + brickH);
             }
         }
         g.dispose();
@@ -2126,10 +2206,21 @@ public class RoundtableHold extends JFrame {
     }
 
     // ── tiny helpers ──────────────────────────────────────────────────────────
-    private Color3f c(float r, float g, float b) { return new Color3f(r, g, b); }
-    private float[] p(float x, float y, float z) { return new float[] { x, y, z }; }
-    private Vector3f vf(float[] a) { return new Vector3f(a[0], a[1], a[2]); }
-    private BoundingSphere wb() { return new BoundingSphere(new Point3d(), 60); }
+    private Color3f c(float r, float g, float b) {
+        return new Color3f(r, g, b);
+    }
+
+    private float[] p(float x, float y, float z) {
+        return new float[] { x, y, z };
+    }
+
+    private Vector3f vf(float[] a) {
+        return new Vector3f(a[0], a[1], a[2]);
+    }
+
+    private BoundingSphere wb() {
+        return new BoundingSphere(new Point3d(), 60);
+    }
 
     private TransformGroup translated(float x, float y, float z, Node child) {
         Transform3D t = new Transform3D();
