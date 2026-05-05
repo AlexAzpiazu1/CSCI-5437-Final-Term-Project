@@ -131,7 +131,7 @@ public class RoundtableHold extends JFrame {
 
     // =========================================================================
     public RoundtableHold() {
-        super("Roundtable Hold — Elden Ring");
+        super("Roundtable Hold - Elden Ring");
         setDefaultCloseOperation(EXIT_ON_CLOSE);
         setSize(1100, 750);
         setLocationRelativeTo(null);
